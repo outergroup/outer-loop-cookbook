@@ -3,6 +3,7 @@ import shutil
 import pprint
 from functools import partial
 
+import botorch
 import torch
 import gpytorch
 from botorch.cross_validation import batch_cross_validation, gen_loo_cv_folds
@@ -23,10 +24,12 @@ def run(sweep_name, model_name):
     # import logging
     # logging.basicConfig()
     # logging.getLogger().setLevel(logging.DEBUG)
+    torch.set_default_dtype(torch.float64)
 
-    # Uncomment for perf
-    # gpytorch.settings.debug._set_state(False)
-    # botorch.settings.debug._set_state(False)
+    # Toggle for perf
+    debug = True
+    gpytorch.settings.debug._set_state(debug)
+    botorch.settings.debug._set_state(debug)
 
     config = CONFIGS[sweep_name]
     model_cls = MODELS[model_name]
@@ -68,7 +71,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="FullyJointLossModel")
+    parser.add_argument("--model-name", type=str, default="VexprFullyJointLossModel")
     parser.add_argument("--sweep-name", type=str, default="mnist1")
 
     cmd_args = parser.parse_args()
