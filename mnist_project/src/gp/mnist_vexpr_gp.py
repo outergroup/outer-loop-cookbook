@@ -19,9 +19,35 @@ N_HOT_PREFIX = "choice_nhot"
 
 import vexpr.core
 
-matern_p, matern = vexpr.core._p_and_constructor(
-    "matern",
-)
+matern_p, matern = vexpr.core._p_and_constructor("matern")
+
+def unary_elementwise_vectorize(shapes, expr):
+    return vexpr.core.Vexpr(
+        expr.op,
+        (vexpr.core_vectorize(shapes, expr.args[0]),),
+        **expr.kwargs)
+
+vexpr.core.vectorize_impls[matern_p] = unary_elementwise_vectorize
+
+def push_stack_through_matern(shapes, expr, allow_partial=True):
+    assert expr.op is vexpr.torch.primitives.stack_p
+
+    exprs_to_stack = expr.args[0]
+    assert all(isinstance(child_expr, vexpr.core.Vexpr)
+               and child_expr.op is matern_p
+               for child_expr in exprs_to_stack)
+
+    nu = exprs_to_stack[0].kwargs.get("nu", 2.5)
+    grandchildren = []
+    for child_expr in exprs_to_stack:
+        assert child_expr.kwargs.get("nu", 2.5) == nu
+        grandchildren.append(child_expr.args[0])
+
+    grandchildren = vexpr.core._vectorize(shapes, 
+                                          vtorch.stack(grandchildren, **expr.kwargs))
+    return matern(grandchildren, nu=nu)
+
+vexpr.core.pushthrough_impls[(vexpr.torch.primitives.stack_p, matern_p)] = push_stack_through_matern
 
 
 def matern_impl(d, nu=2.5):
@@ -69,8 +95,6 @@ class VexprKernel(gpytorch.kernels.Kernel):
             name=name,
             parameter=torch.nn.Parameter(
                 torch.zeros(*batch_shape, 1))
-            # parameter=torch.nn.Parameter(
-            #     torch.zeros(*batch_shape, 1, 1))
         )
 
         if scale_constraint is None:
@@ -137,11 +161,8 @@ class VexprKernel(gpytorch.kernels.Kernel):
         cont_indices = torch.tensor(cont_indices)
         cat_indices = torch.tensor(cat_indices)
 
-        # @vp.vectorize
-        @vp.make_vexpr
+        @vp.vectorize
         def kernel_f(x1, x2, scale, lengthscale):
-            # TODO: the ... ought not be necessary in lengthscale once we do
-            # vmap.
             return (scale
                     * vtorch.prod([
                         matern(vtorch.cdist(x1[..., cont_indices]
@@ -150,11 +171,16 @@ class VexprKernel(gpytorch.kernels.Kernel):
                                               / lengthscale[cont_indices],
                                               p=2),
                                  nu=2.5),
-                        vtorch.exp(-vtorch.cdist(x1[..., cat_indices]
+                        matern(vtorch.cdist(x1[..., cat_indices]
                                                  / lengthscale[cat_indices],
                                                  x2[..., cat_indices]
                                                  / lengthscale[cat_indices],
                                                  p=1))
+                        # vtorch.exp(-vtorch.cdist(x1[..., cat_indices]
+                        #                          / lengthscale[cat_indices],
+                        #                          x2[..., cat_indices]
+                        #                          / lengthscale[cat_indices],
+                        #                          p=1))
                     ], dim=0))
 
         # Enable batching
