@@ -8,6 +8,7 @@ from functools import partial
 import botorch
 import gpytorch
 import outerloop as ol
+import outerloop.vexpr.torch as ovt
 import torch
 
 import vexpr as vp
@@ -15,48 +16,6 @@ import vexpr.torch as vtorch
 
 
 N_HOT_PREFIX = "choice_nhot"
-
-
-import vexpr.core
-
-matern_p, matern = vexpr.core._p_and_constructor("matern")
-
-def unary_elementwise_vectorize(shapes, expr):
-    return vexpr.core.Vexpr(
-        expr.op,
-        (vexpr.core_vectorize(shapes, expr.args[0]),),
-        **expr.kwargs)
-
-vexpr.core.vectorize_impls[matern_p] = unary_elementwise_vectorize
-
-def push_stack_through_matern(shapes, expr, allow_partial=True):
-    assert expr.op is vexpr.torch.primitives.stack_p
-
-    exprs_to_stack = expr.args[0]
-    assert all(isinstance(child_expr, vexpr.core.Vexpr)
-               and child_expr.op is matern_p
-               for child_expr in exprs_to_stack)
-
-    nu = exprs_to_stack[0].kwargs.get("nu", 2.5)
-    grandchildren = []
-    for child_expr in exprs_to_stack:
-        assert child_expr.kwargs.get("nu", 2.5) == nu
-        grandchildren.append(child_expr.args[0])
-
-    grandchildren = vexpr.core._vectorize(shapes, 
-                                          vtorch.stack(grandchildren, **expr.kwargs))
-    return matern(grandchildren, nu=nu)
-
-vexpr.core.pushthrough_impls[(vexpr.torch.primitives.stack_p, matern_p)] = push_stack_through_matern
-
-
-def matern_impl(d, nu=2.5):
-    assert nu == 2.5
-    exp_component = torch.exp(-math.sqrt(5) * d)
-    constant_component = 1. + (math.sqrt(5) * d) + (5. / 3.) * d**2
-    return constant_component * exp_component
-
-vexpr.core.eval_impls[matern_p] = matern_impl
 
 
 class VexprKernel(gpytorch.kernels.Kernel):
@@ -165,17 +124,17 @@ class VexprKernel(gpytorch.kernels.Kernel):
         def kernel_f(x1, x2, scale, lengthscale):
             return (scale
                     * vtorch.prod([
-                        matern(vtorch.cdist(x1[..., cont_indices]
-                                              / lengthscale[cont_indices],
-                                              x2[..., cont_indices]
-                                              / lengthscale[cont_indices],
-                                              p=2),
-                                 nu=2.5),
-                        matern(vtorch.cdist(x1[..., cat_indices]
-                                                 / lengthscale[cat_indices],
-                                                 x2[..., cat_indices]
-                                                 / lengthscale[cat_indices],
-                                                 p=1))
+                        ovt.matern(vtorch.cdist(x1[..., cont_indices]
+                                                / lengthscale[cont_indices],
+                                                x2[..., cont_indices]
+                                                / lengthscale[cont_indices],
+                                                p=2),
+                                   nu=2.5),
+                        ovt.matern(vtorch.cdist(x1[..., cat_indices]
+                                                / lengthscale[cat_indices],
+                                                x2[..., cat_indices]
+                                                / lengthscale[cat_indices],
+                                                p=1))
                         # vtorch.exp(-vtorch.cdist(x1[..., cat_indices]
                         #                          / lengthscale[cat_indices],
                         #                          x2[..., cat_indices]
