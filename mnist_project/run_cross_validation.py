@@ -71,7 +71,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="VexprFullyJointLossModel")
+    parser.add_argument("--model-name", type=str, default="VexprHandsOnLossModel")
     parser.add_argument("--sweep-name", type=str, default="mnist1")
 
     cmd_args = parser.parse_args()

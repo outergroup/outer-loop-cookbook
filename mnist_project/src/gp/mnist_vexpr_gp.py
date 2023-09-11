@@ -156,6 +156,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
         return d
 
     # def _apply(self, fn):
+    #     self = super()._apply(self, fn)
     #     # TODO: this causes bugs by converting primitives into new instances
     #     # of primitives, breaking "is symbol_p" checks
     #     self.kernel_f = tree_map(
@@ -190,11 +191,6 @@ class VexprKernel(gpytorch.kernels.Kernel):
 
     @property
     def scale(self):
-        # TODO: remove this caching. Implement instead using partial evaluation
-        # in the Vexpr.
-        #
-        # TODO: move constraint logic into the Vexpr, perhaps by substituting
-        # lengthscale with a Vexpr that computes it from raw_lengthscale.
         with torch.profiler.record_function("VexprKernel.scale"):
             if self.training:
                 return self.raw_scale_constraint.transform(self.raw_scale)
