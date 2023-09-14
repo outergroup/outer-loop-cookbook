@@ -7,11 +7,12 @@ import outerloop.vexpr.torch as ovt
 import torch
 import vexpr as vp
 import vexpr.torch as vtorch
+import vexpr.custom.torch as vctorch
 from jax.tree_util import tree_map
 
 
 class ValueModule(gpytorch.Module):
-    def __init__(self, shape, constraint, prior=None):
+    def __init__(self, shape, constraint, prior=None, initialize="mean"):
         super().__init__()
         name = "raw_value"
         self.register_parameter(
@@ -23,6 +24,25 @@ class ValueModule(gpytorch.Module):
             self.register_prior(f"prior", prior,
                                 ValueModule.get_value,
                                 ValueModule.set_value)
+
+            if initialize is not None:
+                if initialize == "mode":
+                    value = prior.mode
+                elif initialize == "mean":
+                    value = prior.mean
+                else:
+                    raise ValueError(f"Unrecognized initialization: {initialize}")
+
+                # Unsqueeze so that broadcasting works, even for dirichlet
+                # prior.
+                if len(shape) > len(value.shape):
+                    for i in reversed(range(len(shape))):
+                        if shape[i] == 1:
+                            value = value.unsqueeze(-1)
+                        else:
+                            break
+
+                ValueModule.set_value(self, value)
 
     @staticmethod
     def get_value(instance):
@@ -111,15 +131,16 @@ def make_handson_kernel(space, batch_shape=()):
 
     def scalar_factorized_and_joint(names, suffix):
         w_additive = vp.symbol("w_additive" + suffix)
-        w_factorized_or_joint = vp.symbol("w_factorized_or_joint" + suffix)
+        alpha_factorized_or_joint = vp.symbol("alpha_factorized_or_joint"
+                                              + suffix)
         state.allocate(w_additive, (len(names), 1, 1),
                        zero_one_exclusive(),
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
-        state.allocate(w_factorized_or_joint, (2, 1, 1),
+        state.allocate(alpha_factorized_or_joint, (1, 1),
                        zero_one_exclusive(),
                        ol.priors.BetaPrior(0.5, 0.5))
         return vtorch.sum(
-            w_factorized_or_joint
+            vctorch.heads_tails(alpha_factorized_or_joint)
             * vtorch.stack([
                 vtorch.sum(
                     w_additive
@@ -181,14 +202,14 @@ def make_handson_kernel(space, batch_shape=()):
          + architecture_kernels()),
         dim=0)
 
-    w_regime_vs_architecture = vp.symbol("w_regime_vs_architecture")
-    w_factorized_vs_joint = vp.symbol("w_regime_vs_architecture")
+    alpha_regime_vs_architecture = vp.symbol("alpha_regime_vs_architecture")
+    alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     scale = vp.symbol("scale")
 
-    state.allocate(w_regime_vs_architecture, (2, 1, 1),
+    state.allocate(alpha_regime_vs_architecture, (1, 1),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(1.0, 1.0))
-    state.allocate(w_factorized_vs_joint, (2, 1, 1),
+    state.allocate(alpha_factorized_vs_joint, (1, 1),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(4.0, 1.0))
     state.allocate(scale, (),
@@ -196,14 +217,16 @@ def make_handson_kernel(space, batch_shape=()):
                    gpytorch.priors.GammaPrior(2.0, 0.15))
 
     kernel = (scale
-              * vtorch.sum(w_factorized_vs_joint
+              * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint)
                            * vtorch.stack([
-                               vtorch.sum(w_regime_vs_architecture
-                                          * vtorch.stack([
-                                              regime_kernel,
-                                              architecture_kernel
-                                          ]),
-                                          dim=0),
+                               vtorch.sum(
+                                   vctorch.heads_tails(
+                                       alpha_regime_vs_architecture)
+                                   * vtorch.stack([
+                                       regime_kernel,
+                                       architecture_kernel
+                                   ]),
+                                   dim=0),
                                joint_kernel]),
                            dim=0))
 
@@ -215,7 +238,7 @@ def make_handson_kernel(space, batch_shape=()):
 
 
 class VexprKernel(gpytorch.kernels.Kernel):
-    def __init__(self, kernel_vexpr, state_modules, batch_shape):
+    def __init__(self, kernel_vexpr, state_modules, batch_shape, initialize="mean"):
         super().__init__()
         self.kernel_vexpr = vp.vectorize(kernel_vexpr)
         self.state = torch.nn.ModuleDict(state_modules)
@@ -230,14 +253,16 @@ class VexprKernel(gpytorch.kernels.Kernel):
                                             for name in state_modules.keys()}))
 
         self.kernel_f = kernel_f
+        self.canary = torch.tensor(0.)
 
     def _apply(self, fn):
         self = super()._apply(fn)
-        self.kernel_vexpr = tree_map(
+        self.canary = fn(self.canary)
+        self.kernel_vexpr.vexpr = tree_map(
             lambda v: (fn(v)
                        if isinstance(v, torch.Tensor)
                        else v),
-            self.kernel_vexpr)
+            self.kernel_vexpr.vexpr)
         return self
 
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
@@ -247,7 +272,8 @@ class VexprKernel(gpytorch.kernels.Kernel):
         parameters = {name: module.value
                       for name, module in self.state.items()}
 
-        return self.kernel_f(x1, x2, parameters)
+        with torch.device(self.canary.device):
+            return self.kernel_f(x1, x2, parameters)
 
 
 class VexprHandsOnLossModel(botorch.models.SingleTaskGP):

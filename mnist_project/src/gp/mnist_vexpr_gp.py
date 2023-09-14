@@ -25,8 +25,6 @@ class VexprKernel(gpytorch.kernels.Kernel):
                  log_lengthscale_gamma_prior_args,
                  cat_lengthscale_gamma_prior_args,
                  scale_gamma_prior_args,
-                 scale_constraint=gpytorch.constraints.GreaterThan(1e-06),
-                 lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-06),
                  initialize="mean",
                  batch_shape=torch.Size([])):
         super().__init__()
@@ -92,8 +90,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
                 torch.zeros(*batch_shape, n))
         )
 
-        if lengthscale_constraint is None:
-            lengthscale_constraint = gpytorch.constraints.Positive()
+        lengthscale_constraint = gpytorch.constraints.GreaterThan(1e-06)
 
         self.register_constraint(name, lengthscale_constraint)
 
@@ -147,21 +144,23 @@ class VexprKernel(gpytorch.kernels.Kernel):
             kernel_f = torch.vmap(kernel_f, in_dims=(0, 0, 0, 0))
 
         self.kernel_f = kernel_f
+        self.canary = torch.tensor(0.)
 
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
         assert not diag
         assert not last_dim_is_batch
 
-        d = self.kernel_f(x1, x2, self.scale, self.lengthscale)
-        return d
+        with torch.device(self.canary.device):
+            return self.kernel_f(x1, x2, self.scale, self.lengthscale)
 
     def _apply(self, fn):
         self = super()._apply(fn)
-        self.kernel_f = tree_map(
+        self.canary = fn(self.canary)
+        self.kernel_f.vexpr = tree_map(
             lambda v: (fn(v)
                        if isinstance(v, torch.Tensor)
                        else v),
-            self.kernel_f)
+            self.kernel_f.vexpr)
         return self
 
     @property
@@ -224,6 +223,7 @@ class VexprFullyJointLossModel(botorch.models.SingleTaskGP):
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
                  round_inputs=True):
+        # with torch.device(train_X.device):
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
         )
