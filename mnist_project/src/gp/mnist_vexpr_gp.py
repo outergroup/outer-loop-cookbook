@@ -10,9 +10,9 @@ import gpytorch
 import outerloop as ol
 import outerloop.vexpr.torch as ovt
 import torch
-
 import vexpr as vp
 import vexpr.torch as vtorch
+from jax.tree_util import tree_map
 
 
 N_HOT_PREFIX = "choice_nhot"
@@ -155,16 +155,14 @@ class VexprKernel(gpytorch.kernels.Kernel):
         d = self.kernel_f(x1, x2, self.scale, self.lengthscale)
         return d
 
-    # def _apply(self, fn):
-    #     self = super()._apply(self, fn)
-    #     # TODO: this causes bugs by converting primitives into new instances
-    #     # of primitives, breaking "is symbol_p" checks
-    #     self.kernel_f = tree_map(
-    #         lambda v: (fn(v)
-    #                    if isinstance(v, torch.Tensor)
-    #                    else v),
-    #         self.kernel_f)
-    #     return self
+    def _apply(self, fn):
+        self = super()._apply(fn)
+        self.kernel_f = tree_map(
+            lambda v: (fn(v)
+                       if isinstance(v, torch.Tensor)
+                       else v),
+            self.kernel_f)
+        return self
 
     @property
     def lengthscale(self):

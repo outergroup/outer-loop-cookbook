@@ -7,6 +7,7 @@ import outerloop.vexpr.torch as ovt
 import torch
 import vexpr as vp
 import vexpr.torch as vtorch
+from jax.tree_util import tree_map
 
 
 class ValueModule(gpytorch.Module):
@@ -230,16 +231,14 @@ class VexprKernel(gpytorch.kernels.Kernel):
 
         self.kernel_f = kernel_f
 
-    # def _apply(self, fn):
-    #     self = super()._apply(self, fn)
-    #     # TODO: this causes bugs by converting primitives into new instances
-    #     # of primitives, breaking "is symbol_p" checks
-    #     self.kernel_vexpr = tree_map(
-    #         lambda v: (fn(v)
-    #                    if isinstance(v, torch.Tensor)
-    #                    else v),
-    #         self.kernel_vexpr)
-    #     return self
+    def _apply(self, fn):
+        self = super()._apply(fn)
+        self.kernel_vexpr = tree_map(
+            lambda v: (fn(v)
+                       if isinstance(v, torch.Tensor)
+                       else v),
+            self.kernel_vexpr)
+        return self
 
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
         assert not diag
