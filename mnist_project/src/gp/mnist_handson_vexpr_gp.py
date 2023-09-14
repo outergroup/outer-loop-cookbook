@@ -216,7 +216,7 @@ def make_handson_kernel(space, batch_shape=()):
 class VexprKernel(gpytorch.kernels.Kernel):
     def __init__(self, kernel_vexpr, state_modules, batch_shape):
         super().__init__()
-        self.kernel_vexpr = kernel_vexpr
+        self.kernel_vexpr = vp.vectorize(kernel_vexpr)
         self.state = torch.nn.ModuleDict(state_modules)
 
         def kernel_f(x1, x2, parameters):
