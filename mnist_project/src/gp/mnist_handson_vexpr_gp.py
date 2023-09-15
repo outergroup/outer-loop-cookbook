@@ -33,15 +33,6 @@ class ValueModule(gpytorch.Module):
                 else:
                     raise ValueError(f"Unrecognized initialization: {initialize}")
 
-                # Unsqueeze so that broadcasting works, even for dirichlet
-                # prior.
-                if len(shape) > len(value.shape):
-                    for i in reversed(range(len(shape))):
-                        if shape[i] == 1:
-                            value = value.unsqueeze(-1)
-                        else:
-                            break
-
                 ValueModule.set_value(self, value)
 
     @staticmethod
@@ -133,10 +124,10 @@ def make_handson_kernel(space, batch_shape=()):
         w_additive = vp.symbol("w_additive" + suffix)
         alpha_factorized_or_joint = vp.symbol("alpha_factorized_or_joint"
                                               + suffix)
-        state.allocate(w_additive, (len(names), 1, 1),
+        state.allocate(w_additive, (len(names),),
                        zero_one_exclusive(),
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
-        state.allocate(alpha_factorized_or_joint, (1, 1),
+        state.allocate(alpha_factorized_or_joint, (),
                        zero_one_exclusive(),
                        ol.priors.BetaPrior(0.5, 0.5))
         return vtorch.sum(
@@ -145,11 +136,12 @@ def make_handson_kernel(space, batch_shape=()):
                 vtorch.sum(
                     w_additive
                     * vtorch.stack([scalar_kernel([name])
-                                    for name in names]),
-                    dim=0),
+                                    for name in names],
+                                   dim=-1),
+                    dim=-1),
                 scalar_kernel(names),
-            ]),
-            dim=0
+            ], dim=-1),
+            dim=-1
         )
 
     def regime_kernels():
@@ -188,28 +180,35 @@ def make_handson_kernel(space, batch_shape=()):
 
     architecture_joint_names = ["log_gmean_channels_and_units"]
 
+    # TODO this might be an unnecessary amount of stacking and using dim=-1. Try
+    # using lists, not stack, which implies dim=0. (Currently the vectorization
+    # code doesn't gracefully handle mixing dim=-1 in the descendent expressions
+    # with dim=0 here.)
     regime_kernel = vtorch.prod(
-        ([scalar_kernel(regime_joint_names)]
-         + regime_kernels()),
-        dim=0)
+        vtorch.stack(([scalar_kernel(regime_joint_names)]
+                      + regime_kernels()),
+                     dim=-1),
+        dim=-1)
     architecture_kernel = vtorch.prod(
-        ([scalar_kernel(architecture_joint_names)]
-         + architecture_kernels()),
-        dim=0)
+        vtorch.stack(([scalar_kernel(architecture_joint_names)]
+                      + architecture_kernels()),
+                     dim=-1),
+        dim=-1)
     joint_kernel = vtorch.prod(
-        ([scalar_kernel(regime_joint_names + architecture_joint_names)]
-         + regime_kernels()
-         + architecture_kernels()),
-        dim=0)
+        vtorch.stack(([scalar_kernel(regime_joint_names + architecture_joint_names)]
+                      + regime_kernels()
+                      + architecture_kernels()),
+                     dim=-1),
+        dim=-1)
 
     alpha_regime_vs_architecture = vp.symbol("alpha_regime_vs_architecture")
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     scale = vp.symbol("scale")
 
-    state.allocate(alpha_regime_vs_architecture, (1, 1),
+    state.allocate(alpha_regime_vs_architecture, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(1.0, 1.0))
-    state.allocate(alpha_factorized_vs_joint, (1, 1),
+    state.allocate(alpha_factorized_vs_joint, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(4.0, 1.0))
     state.allocate(scale, (),
@@ -218,17 +217,19 @@ def make_handson_kernel(space, batch_shape=()):
 
     kernel = (scale
               * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint)
-                           * vtorch.stack([
-                               vtorch.sum(
+                           * vtorch.stack(
+                               [vtorch.sum(
                                    vctorch.heads_tails(
-                                       alpha_regime_vs_architecture)
+                                       alpha_regime_vs_architecture,
+                                       dim=-1)
                                    * vtorch.stack([
                                        regime_kernel,
                                        architecture_kernel
-                                   ]),
-                                   dim=0),
-                               joint_kernel]),
-                           dim=0))
+                                   ], dim=-1),
+                                   dim=-1),
+                                joint_kernel],
+                               dim=-1),
+                           dim=-1))
 
     state.allocate(lengthscale, (ialloc.count,),
                    gpytorch.constraints.GreaterThan(1e-4),
