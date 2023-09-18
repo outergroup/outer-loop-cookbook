@@ -22,7 +22,7 @@ class ValueModule(gpytorch.Module):
         self.register_constraint(name, constraint)
         if prior is not None:
             self.register_prior(f"prior", prior,
-                                ValueModule.get_value,
+                                ValueModule.botorch_get_value,
                                 ValueModule.set_value)
 
             if initialize is not None:
@@ -36,8 +36,9 @@ class ValueModule(gpytorch.Module):
                 ValueModule.set_value(self, value)
 
     @staticmethod
-    def get_value(instance):
-        return instance.value
+    def botorch_get_value(instance):
+        # botorch "sample_all_priors" expects an extra dimension at the end
+        return instance.value.unsqueeze(-1)
 
     @staticmethod
     def set_value(instance, v):
@@ -108,8 +109,8 @@ def make_handson_kernel(space, batch_shape=()):
         indices = [index_for_name(name) for name in names]
         return ovt.matern(vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
                                        x2[..., indices] / lengthscale[ls_indices],
-                                   p=2),
-                      nu=2.5)
+                                       p=2),
+                          nu=2.5)
 
     def choice_kernel(names):
         ls_indices = ialloc.allocate(len(names))
