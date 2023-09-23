@@ -154,8 +154,7 @@ def make_handson_kernel(space, batch_shape=()):
                            * vtorch.stack(
                                [vtorch.sum(
                                    vctorch.heads_tails(
-                                       alpha_regime_vs_architecture,
-                                       dim=-1)
+                                       alpha_regime_vs_architecture)
                                    * vtorch.stack([
                                        regime_kernel,
                                        architecture_kernel
@@ -215,11 +214,13 @@ class VexprHandsOnLossModel(botorch.models.SingleTaskGP):
     def __init__(self, train_X, train_Y,
                  search_space,
                  search_xform,
+                 train_Yvar=None,  # included to suppress botorch warnings
                  normalize_input=True,
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
                  round_inputs=True):
+        assert train_Yvar is None
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
         )

@@ -65,7 +65,7 @@ def make_botorch_range_choice_kernel(space, batch_shape=()):
     state.allocate(alpha_range_vs_nhot, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(1.0, 1.0))
-    sum_kernel = vtorch.sum(vctorch.heads_tails(alpha_range_vs_nhot, dim=-1)
+    sum_kernel = vtorch.sum(vctorch.heads_tails(alpha_range_vs_nhot)
                             * vtorch.stack([range_kernel(), nhot_kernel()],
                                            dim=-1),
                             dim=-1)
@@ -81,8 +81,7 @@ def make_botorch_range_choice_kernel(space, batch_shape=()):
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(2.0, 0.15))
-    kernel = scale * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint,
-                                                    dim=-1)
+    kernel = scale * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint)
                                 * vtorch.stack([sum_kernel, prod_kernel],
                                                dim=-1),
                                 dim=-1)
@@ -137,11 +136,14 @@ class VexprFullyJointLossModel(botorch.models.SingleTaskGP):
     def __init__(self, train_X, train_Y,
                  search_space,
                  search_xform,
+                 train_Yvar=None,  # included to suppress botorch warnings
                  normalize_input=True,
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
                  round_inputs=True):
+        assert train_Yvar is None
+
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
         )
