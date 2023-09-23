@@ -1,8 +1,3 @@
-"""
-Fit a GP to a list of trial directories.
-"""
-
-import math
 from functools import partial
 
 import botorch
@@ -12,218 +7,141 @@ import outerloop.vexpr.torch as ovt
 import torch
 import vexpr as vp
 import vexpr.torch as vtorch
+import vexpr.custom.torch as vctorch
 from jax.tree_util import tree_map
+
+from .gp_utils import State, IndexAllocator
 
 
 N_HOT_PREFIX = "choice_nhot"
 
 
+def make_botorch_range_choice_kernel(space, batch_shape=()):
+    """
+    This kernel is similar to Botorch's MixedSingleTaskGP. The two are
+    equivalent, just with different parameterizations and priors. The
+    multiplicative weights are parameterized differently, and this nhot kernel
+    uses the sum, not the mean (this is equivalent to having a different
+    lengthscale priors).
+    """
+    zero_one_exclusive = partial(gpytorch.constraints.Interval,
+                                 1e-6,
+                                 1 - 1e-6)
+
+    state = State(batch_shape)
+
+    ialloc = IndexAllocator()
+
+    lengthscale = vp.symbol("lengthscale")
+    x1 = vp.symbol("x1")
+    x2 = vp.symbol("x2")
+
+    range_indices = []
+    nhot_indices = []
+    for i, p in enumerate(space):
+        if N_HOT_PREFIX in p.name:
+            nhot_indices.append(i)
+        else:
+            range_indices.append(i)
+
+    def range_kernel():
+        ls_indices = ialloc.allocate(len(range_indices))
+        return ovt.matern(vtorch.cdist(x1[..., range_indices]
+                                       / lengthscale[ls_indices],
+                                       x2[..., range_indices]
+                                       / lengthscale[ls_indices],
+                                       p=2),
+                          nu=2.5)
+
+    def nhot_kernel():
+        ls_indices = ialloc.allocate(len(nhot_indices))
+        return vtorch.exp(-vtorch.cdist(x1[..., nhot_indices]
+                                        / lengthscale[ls_indices],
+                                        x2[..., nhot_indices]
+                                        / lengthscale[ls_indices],
+                                        p=1))
+
+    alpha_range_vs_nhot = vp.symbol("alpha_range_vs_nhot")
+    state.allocate(alpha_range_vs_nhot, (),
+                   zero_one_exclusive(),
+                   ol.priors.BetaPrior(1.0, 1.0))
+    sum_kernel = vtorch.sum(vctorch.heads_tails(alpha_range_vs_nhot, dim=-1)
+                            * vtorch.stack([range_kernel(), nhot_kernel()],
+                                           dim=-1),
+                            dim=-1)
+    prod_kernel = vtorch.prod(vtorch.stack([range_kernel(), nhot_kernel()],
+                                           dim=-1),
+                              dim=-1)
+
+    alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
+    state.allocate(alpha_factorized_vs_joint, (),
+                   zero_one_exclusive(),
+                   ol.priors.BetaPrior(1.0, 1.0))
+    scale = vp.symbol("scale")
+    state.allocate(scale, (),
+                   gpytorch.constraints.GreaterThan(1e-4),
+                   gpytorch.priors.GammaPrior(2.0, 0.15))
+    kernel = scale * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint,
+                                                    dim=-1)
+                                * vtorch.stack([sum_kernel, prod_kernel],
+                                               dim=-1),
+                                dim=-1)
+
+    state.allocate(lengthscale, (ialloc.count,),
+                   gpytorch.constraints.GreaterThan(1e-4),
+                   gpytorch.priors.GammaPrior(3.0, 6.0))
+
+    return kernel, state.modules
+
+
 class VexprKernel(gpytorch.kernels.Kernel):
-    def __init__(self,
-                 space,
-                 linear_lengthscale_gamma_prior_args,
-                 log_lengthscale_gamma_prior_args,
-                 cat_lengthscale_gamma_prior_args,
-                 scale_gamma_prior_args,
-                 initialize="mean",
-                 batch_shape=torch.Size([])):
+    def __init__(self, kernel_vexpr, state_modules, batch_shape, initialize="mean"):
         super().__init__()
+        self.kernel_vexpr = vp.vectorize(kernel_vexpr)
+        self.state = torch.nn.ModuleDict(state_modules)
 
-        log_range_names = ["log_epochs", "log_batch_size",
-                           "log_conv1_weight_decay", "log_conv2_weight_decay",
-                           "log_conv3_weight_decay", "log_dense1_weight_decay",
-                           "log_dense2_weight_decay",
-                           "log_1cycle_initial_lr_pct",
-                           "log_1cycle_final_lr_pct", "log_1cycle_max_lr",
-                           "log_conv1_channels", "log_conv2_channels",
-                           "log_conv3_channels", "log_dense1_units"]
+        def kernel_f(x1, x2, parameters):
+            return self.kernel_vexpr(x1=x1, x2=x2, **parameters)
 
-        linear_range_names = ["1cycle_pct_warmup", "1cycle_max_momentum",
-                              "1cycle_min_momentum_pct"]
-
-        choice_names = [f"{N_HOT_PREFIX}{i}"
-                        for i in range(4)]
-
-        scale_prior = gpytorch.priors.GammaPrior(*scale_gamma_prior_args)
-
-        scale_constraint = gpytorch.constraints.GreaterThan(1e-06)
-        name = "raw_scale"
-        self.register_parameter(
-            name=name,
-            parameter=torch.nn.Parameter(
-                torch.zeros(*batch_shape, 1))
-        )
-
-        if scale_constraint is None:
-            scale_constraint = gpytorch.constraints.Positive()
-
-        self.register_constraint(name, scale_constraint)
-
-        if scale_prior is not None:
-            self.register_prior(f"scale_prior", scale_prior,
-                                VexprKernel.get_scale,
-                                VexprKernel.set_scale)
-
-
-        n = len(log_range_names) + len(linear_range_names) + len(choice_names)
-        concentration_rate = []
-        for i in range(n):
-            # this kernel assumes one lengthscale per input feature.
-            name = space[i].name
-            if name in log_range_names:
-                concentration_rate.append(log_lengthscale_gamma_prior_args)
-            elif name in linear_range_names:
-                concentration_rate.append(linear_lengthscale_gamma_prior_args)
-            elif name in choice_names:
-                concentration_rate.append(cat_lengthscale_gamma_prior_args)
-            else:
-                raise ValueError(name)
-        concentration, rate = zip(*concentration_rate)
-        concentration = torch.tensor(concentration)
-        rate = torch.tensor(rate)
-        lengthscale_gamma_prior_args = concentration, rate
-        lengthscale_prior = gpytorch.priors.GammaPrior(*lengthscale_gamma_prior_args)
-        name = "raw_lengthscale"
-        self.register_parameter(
-            name=name,
-            parameter=torch.nn.Parameter(
-                torch.zeros(*batch_shape, n))
-        )
-
-        lengthscale_constraint = gpytorch.constraints.GreaterThan(1e-06)
-
-        self.register_constraint(name, lengthscale_constraint)
-
-        if lengthscale_prior is not None:
-            self.register_prior(f"lengthscale_prior", lengthscale_prior,
-                                VexprKernel.get_lengthscale,
-                                VexprKernel.set_lengthscale)
-            if initialize is not None:
-                if initialize == "mode":
-                    value = lengthscale_prior.mode
-                elif initialize == "mean":
-                    value = lengthscale_prior.mean
-                else:
-                    raise ValueError(f"Unrecognized initialization: {initialize}")
-
-                self.set_lengthscale(self, value)
-
-        (cont_indices,
-         cat_indices) = ([next(i for i, t in enumerate(space)
-                               if t.name == name)
-                          for name in names]
-                         for names in (log_range_names + linear_range_names,
-                                       choice_names))
-        cont_indices = torch.tensor(cont_indices)
-        cat_indices = torch.tensor(cat_indices)
-
-        @vp.vectorize
-        def kernel_f(x1, x2, scale, lengthscale):
-            return (scale
-                    * vtorch.prod([
-                        ovt.matern(vtorch.cdist(x1[..., cont_indices]
-                                                / lengthscale[cont_indices],
-                                                x2[..., cont_indices]
-                                                / lengthscale[cont_indices],
-                                                p=2),
-                                   nu=2.5),
-                        ovt.matern(vtorch.cdist(x1[..., cat_indices]
-                                                / lengthscale[cat_indices],
-                                                x2[..., cat_indices]
-                                                / lengthscale[cat_indices],
-                                                p=1))
-                        # vtorch.exp(-vtorch.cdist(x1[..., cat_indices]
-                        #                          / lengthscale[cat_indices],
-                        #                          x2[..., cat_indices]
-                        #                          / lengthscale[cat_indices],
-                        #                          p=1))
-                    ], dim=0))
-
-        # Enable batching
         for _ in batch_shape:
-            kernel_f = torch.vmap(kernel_f, in_dims=(0, 0, 0, 0))
+            kernel_f = torch.vmap(kernel_f,
+                                  in_dims=(0, 0,
+                                           {name: 0
+                                            for name in state_modules.keys()}))
 
         self.kernel_f = kernel_f
         self.canary = torch.tensor(0.)
+
+    def _apply(self, fn):
+        self = super()._apply(fn)
+        self.canary = fn(self.canary)
+        self.kernel_vexpr.vexpr = tree_map(
+            lambda v: (fn(v)
+                       if isinstance(v, torch.Tensor)
+                       else v),
+            self.kernel_vexpr.vexpr)
+        return self
 
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
         assert not diag
         assert not last_dim_is_batch
 
+        parameters = {name: module.value
+                      for name, module in self.state.items()}
+
         with torch.device(self.canary.device):
-            return self.kernel_f(x1, x2, self.scale, self.lengthscale)
-
-    def _apply(self, fn):
-        self = super()._apply(fn)
-        self.canary = fn(self.canary)
-        self.kernel_f.vexpr = tree_map(
-            lambda v: (fn(v)
-                       if isinstance(v, torch.Tensor)
-                       else v),
-            self.kernel_f.vexpr)
-        return self
-
-    @property
-    def lengthscale(self):
-        with torch.profiler.record_function("VexprKernel.lengthscale"):
-            if self.training:
-                return self.raw_lengthscale_constraint.transform(self.raw_lengthscale)
-            else:
-                with torch.no_grad():
-                    return self.raw_lengthscale_constraint.transform(self.raw_lengthscale)
-
-    @staticmethod
-    def get_lengthscale(instance):
-        return instance.lengthscale
-
-    @staticmethod
-    def set_lengthscale(instance, v):
-        if not torch.is_tensor(v):
-            v = torch.as_tensor(v).to(instance.raw_lengthscale)
-
-        instance.initialize(
-            **{"raw_lengthscale":
-               instance.raw_lengthscale_constraint.inverse_transform(v)}
-        )
-
-    @property
-    def scale(self):
-        with torch.profiler.record_function("VexprKernel.scale"):
-            if self.training:
-                return self.raw_scale_constraint.transform(self.raw_scale)
-            else:
-                with torch.no_grad():
-                    return self.raw_scale_constraint.transform(self.raw_scale)
-
-    @staticmethod
-    def get_scale(instance):
-        return instance.scale
-
-    @staticmethod
-    def set_scale(instance, v):
-        if not torch.is_tensor(v):
-            v = torch.as_tensor(v).to(instance.raw_scale)
-
-        instance.initialize(
-            **{"raw_scale":
-               instance.raw_scale_constraint.inverse_transform(v)}
-        )
+            return self.kernel_f(x1, x2, parameters)
 
 
 class VexprFullyJointLossModel(botorch.models.SingleTaskGP):
     def __init__(self, train_X, train_Y,
                  search_space,
                  search_xform,
-                 linear_lengthscale_gamma_prior_args=(3.0, 6.0),
-                 log_lengthscale_gamma_prior_args=(3.0, 6.0),
-                 cat_lengthscale_gamma_prior_args=(3.0, 6.0),
-                 scale_gamma_prior_args=(2.0, 0.15),
                  normalize_input=True,
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
                  round_inputs=True):
-        # with torch.device(train_X.device):
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
         )
@@ -232,17 +150,15 @@ class VexprFullyJointLossModel(botorch.models.SingleTaskGP):
         if round_inputs:
             xforms.append(partial(ol.transforms.UntransformThenTransform,
                                   xform=search_xform))
-        xforms.append(partial(ol.transforms.ChoiceNHotProjection,
-                              out_name=N_HOT_PREFIX))
+
+        xforms += [
+            partial(ol.transforms.ChoiceNHotProjection, out_name=N_HOT_PREFIX)
+        ]
 
         xform = ol.transforms.Chain(search_space, *xforms)
 
         covar_module = VexprKernel(
-            space=xform.space2,
-            linear_lengthscale_gamma_prior_args=linear_lengthscale_gamma_prior_args,
-            log_lengthscale_gamma_prior_args=log_lengthscale_gamma_prior_args,
-            cat_lengthscale_gamma_prior_args=cat_lengthscale_gamma_prior_args,
-            scale_gamma_prior_args=scale_gamma_prior_args,
+            *make_botorch_range_choice_kernel(xform.space2, aug_batch_shape),
             batch_shape=aug_batch_shape,
         )
 
