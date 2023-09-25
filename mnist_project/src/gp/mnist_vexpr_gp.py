@@ -69,9 +69,10 @@ def make_botorch_range_choice_kernel(space, batch_shape=()):
                             * vtorch.stack([range_kernel(), nhot_kernel()],
                                            dim=-1),
                             dim=-1)
-    prod_kernel = vtorch.prod(vtorch.stack([range_kernel(), nhot_kernel()],
-                                           dim=-1),
-                              dim=-1)
+    prod_kernel = vctorch.fast_prod_positive(
+        vtorch.stack([range_kernel(), nhot_kernel()],
+                     dim=-1),
+        dim=-1)
 
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     state.allocate(alpha_factorized_vs_joint, (),

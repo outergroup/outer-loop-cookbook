@@ -118,17 +118,17 @@ def make_handson_kernel(space, batch_shape=()):
     # using lists, not stack, which implies dim=0. (Currently the vectorization
     # code doesn't gracefully handle mixing dim=-1 in the descendent expressions
     # with dim=0 here.)
-    regime_kernel = vtorch.prod(
+    regime_kernel = vctorch.fast_prod_positive(
         vtorch.stack(([scalar_kernel(regime_joint_names)]
                       + regime_kernels()),
                      dim=-1),
         dim=-1)
-    architecture_kernel = vtorch.prod(
+    architecture_kernel = vctorch.fast_prod_positive(
         vtorch.stack(([scalar_kernel(architecture_joint_names)]
                       + architecture_kernels()),
                      dim=-1),
         dim=-1)
-    joint_kernel = vtorch.prod(
+    joint_kernel = vctorch.fast_prod_positive(
         vtorch.stack(([scalar_kernel(regime_joint_names + architecture_joint_names)]
                       + regime_kernels()
                       + architecture_kernels()),
