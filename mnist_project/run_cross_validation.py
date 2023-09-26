@@ -27,7 +27,7 @@ def run(sweep_name, model_name):
     torch.set_default_dtype(torch.float64)
 
     # Toggle for perf
-    debug = True
+    debug = False
     gpytorch.settings.debug._set_state(debug)
     botorch.settings.debug._set_state(debug)
 
@@ -55,6 +55,8 @@ def run(sweep_name, model_name):
     X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
                                mnist1.space, mnist1.xform, device=device)
 
+    result_dir = "results/cv"
+    os.makedirs(result_dir, exist_ok=True)
     for n_cv in n_cvs:
         print(f"# of examples: {n_cv}")
         cv_folds = gen_loo_cv_folds(train_X=X[:n_cv], train_Y=Y[:n_cv])
@@ -65,6 +67,15 @@ def run(sweep_name, model_name):
             cv_folds=cv_folds,
             observation_noise=True,
         )
+
+        filename = os.path.join(result_dir, f"cv-{model_name}-{n_cv}.pt")
+        result = {
+            "state_dict": cv_results.model.state_dict(),
+            "posterior": cv_results.posterior,
+            "observed_Y": cv_results.observed_Y.cpu(),
+        }
+        print(f"Saving {filename}")
+        torch.save(result, filename)
 
 
 def main():
