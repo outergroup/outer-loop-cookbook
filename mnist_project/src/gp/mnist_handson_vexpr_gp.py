@@ -63,7 +63,7 @@ def make_handson_kernel(space, batch_shape=()):
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
         state.allocate(alpha_factorized_or_joint, (),
                        zero_one_exclusive(),
-                       ol.priors.BetaPrior(0.5, 0.5))
+                       ol.priors.BetaPrior(4.0, 1.0))
         return vtorch.sum(
             vctorch.heads_tails(alpha_factorized_or_joint)
             * vtorch.stack([
