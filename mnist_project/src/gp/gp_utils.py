@@ -21,7 +21,7 @@ def configs_dirs_to_X_Y(configs, trial_dirs, metric, space, xform,
 
 
 class ValueModule(gpytorch.Module):
-    def __init__(self, shape, constraint, prior=None, initialize="mean"):
+    def __init__(self, shape, constraint, prior=None, initialize=None):
         super().__init__()
         name = "raw_value"
         self.register_parameter(
@@ -74,10 +74,10 @@ class State:
         self.batch_shape = batch_shape
         self.modules = {}
 
-    def allocate(self, symbol, shape, constraint=None, prior=None):
+    def allocate(self, symbol, shape, constraint=None, prior=None, initialize=None):
         shape = self.batch_shape + shape
         name = symbol.args[0]
-        self.modules[name] = ValueModule(shape, constraint, prior)
+        self.modules[name] = ValueModule(shape, constraint, prior, initialize)
 
 
 class IndexAllocator:
