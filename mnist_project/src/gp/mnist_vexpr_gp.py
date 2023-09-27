@@ -64,7 +64,7 @@ def make_botorch_range_choice_kernel(space, batch_shape=()):
     alpha_range_vs_nhot = vp.symbol("alpha_range_vs_nhot")
     state.allocate(alpha_range_vs_nhot, (),
                    zero_one_exclusive(),
-                   ol.priors.BetaPrior(1.0, 1.0))
+                   ol.priors.BetaPrior(2.0, 2.0))
     sum_kernel = vtorch.sum(vctorch.heads_tails(alpha_range_vs_nhot)
                             * vtorch.stack([range_kernel(), nhot_kernel()],
                                            dim=-1),
@@ -77,7 +77,7 @@ def make_botorch_range_choice_kernel(space, batch_shape=()):
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     state.allocate(alpha_factorized_vs_joint, (),
                    zero_one_exclusive(),
-                   ol.priors.BetaPrior(1.0, 1.0))
+                   ol.priors.BetaPrior(2.0, 2.0))
     scale = vp.symbol("scale")
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),

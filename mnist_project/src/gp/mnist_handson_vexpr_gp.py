@@ -141,7 +141,7 @@ def make_handson_kernel(space, batch_shape=()):
 
     state.allocate(alpha_regime_vs_architecture, (),
                    zero_one_exclusive(),
-                   ol.priors.BetaPrior(1.0, 1.0))
+                   ol.priors.BetaPrior(2.0, 2.0))
     state.allocate(alpha_factorized_vs_joint, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(4.0, 1.0))
