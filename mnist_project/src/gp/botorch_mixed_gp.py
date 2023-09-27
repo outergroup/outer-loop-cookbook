@@ -133,7 +133,9 @@ class BotorchMixedGP(botorch.models.MixedSingleTaskGP):
                         active_dims=cat_dims,
                         lengthscale_constraint=GreaterThan(1e-06),
                         lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
-                    )
+                    ),
+                    outputscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
+                    outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
                 ),
                 outputscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
                 outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15)
