@@ -185,9 +185,20 @@ class VexprFullyJointLossModel(botorch.models.SingleTaskGP):
                 batch_shape=aug_batch_shape,
             )
 
+        # Use likelihood from botorch MixedSingleTaskGP
+        min_noise = 1e-5 if train_X.dtype == torch.float else 1e-6
+        likelihood = gpytorch.likelihoods.GaussianLikelihood(
+            batch_shape=aug_batch_shape,
+            noise_constraint=gpytorch.constraints.GreaterThan(
+                min_noise, transform=None, initial_value=1e-3
+            ),
+            noise_prior=gpytorch.priors.GammaPrior(0.9, 10.0),
+        )
+
         super().__init__(
             train_X, train_Y,
             input_transform=input_transform,
             covar_module=covar_module,
+            likelihood=likelihood,
             **extra_kwargs
         )
