@@ -40,12 +40,11 @@ class Sobol:
             self.rounding_function = ol.transforms.UntransformThenTransform(
                 self.search_space, self.xform
             ).transform
-                                  
         else:
             self.search_space = space
             self.rounding_function = None
 
-    def __call__(self, trial_dir, prev_trials, pending_configs):
+    def __call__(self, trial_dir, prev_configs, prev_trials, pending_configs):
         # TODO find better place for this
         torch.set_default_dtype(torch.float64)
 

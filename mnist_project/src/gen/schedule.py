@@ -14,5 +14,5 @@ class Schedule:
         for threshold, instance in self.steps:
             if n < threshold:
                 return instance(trial_dir, prev_configs, prev_trial_dirs, pending_configs)
-            
+
         raise ValueError(f"No schedule item found for trial number {n}")
