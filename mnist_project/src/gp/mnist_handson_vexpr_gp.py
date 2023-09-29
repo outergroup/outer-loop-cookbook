@@ -86,11 +86,15 @@ def make_handson_kernel(space, batch_shape=()):
 
             # kernel: lr schedule
             scalar_factorized_and_joint(["log_1cycle_initial_lr", "log_1cycle_final_lr",
-                                         "log_1cycle_max_lr", "1cycle_pct_warmup"],
+                                         "log_1cycle_max_lr", "log_1cycle_pct_warmup"],
                                         "_lr"),
 
             # kernel: momentum schedule
-            scalar_factorized_and_joint(["1cycle_max_momentum", "1cycle_min_momentum"],
+            scalar_factorized_and_joint(["log_1cycle_momentum_max_damping_factor",
+                                         "log_1cycle_momentum_min_damping_factor",
+                                         "log_1cycle_beta1_max_damping_factor",
+                                         "log_1cycle_beta1_min_damping_factor",
+                                         "log_beta2_damping_factor"],
                                         "_momentum"),
 
             # kernel: relative weight decay
@@ -245,6 +249,14 @@ class VexprHandsOnLossModel(botorch.models.SingleTaskGP):
                 {"log_1cycle_initial_lr_pct": "log_1cycle_initial_lr",
                  "log_1cycle_final_lr_pct": "log_1cycle_final_lr"},
                 "log_1cycle_max_lr"),
+            ol.transforms.add(
+                {"log_1cycle_momentum_min_damping_factor_pct":
+                 "log_1cycle_momentum_min_damping_factor"},
+                "log_1cycle_momentum_max_damping_factor"),
+            ol.transforms.add(
+                {"log_1cycle_beta1_min_damping_factor_pct":
+                 "log_1cycle_beta1_min_damping_factor"},
+                "log_1cycle_beta1_max_damping_factor"),
             ol.transforms.append_mean(
                 ["log_conv1_weight_decay", "log_conv2_weight_decay",
                  "log_conv3_weight_decay", "log_dense1_weight_decay",
@@ -257,9 +269,6 @@ class VexprHandsOnLossModel(botorch.models.SingleTaskGP):
                  "log_dense1_weight_decay": "log_dense1_wd_div_gmean",
                  "log_dense2_weight_decay": "log_dense2_wd_div_gmean"},
                 "log_gmean_weight_decay"),
-            ol.transforms.multiply(
-                {"1cycle_min_momentum_pct": "1cycle_min_momentum"},
-                "1cycle_max_momentum"),
             partial(ol.transforms.ChoiceNHotProjection,
                     out_name=N_HOT_PREFIX)
         ]

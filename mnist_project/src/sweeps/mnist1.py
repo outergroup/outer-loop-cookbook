@@ -28,10 +28,19 @@ space = [
     ol.Scalar("1cycle_final_lr_pct", 1/30000, 1/100),
     ol.Scalar("1cycle_pct_warmup", 0.01, 0.5),
     ol.Scalar("1cycle_max_lr", 0.01, 20.0),
-    ol.Scalar("1cycle_max_momentum", 0, 0.9999,
+
+    # Use "damping factors" (1 - momentum) rather than momentums so that they
+    # can be used on a log scale.
+    ol.Scalar("1cycle_momentum_max_damping_factor", 1e-4, 1.0,
               condition=lambda choices: choices["optimizer"] == "sgd"),
-    ol.Scalar("1cycle_min_momentum_pct", 0.0, 1.0,
+    ol.Scalar("1cycle_momentum_min_damping_factor_pct", 0.1, 1.0,
               condition=lambda choices: choices["optimizer"] == "sgd"),
+    ol.Scalar("1cycle_beta1_max_damping_factor", 1e-4, 0.5,
+              condition=lambda choices: choices["optimizer"] == "adam"),
+    ol.Scalar("1cycle_beta1_min_damping_factor_pct", 0.1, 1.0,
+              condition=lambda choices: choices["optimizer"] == "adam"),
+    ol.Scalar("beta2_damping_factor", 1e-4, 0.5,
+              condition=lambda choices: choices["optimizer"] == "adam"),
 
     ol.Int("conv1_channels", 4, 64),
     ol.Int("conv2_channels", 8, 128),
@@ -47,6 +56,12 @@ xform = ol.transforms.ToScalarSpace(
         "1cycle_initial_lr_pct": "log_1cycle_initial_lr_pct",
         "1cycle_final_lr_pct": "log_1cycle_final_lr_pct",
         "1cycle_max_lr": "log_1cycle_max_lr",
+        "1cycle_pct_warmup": "log_1cycle_pct_warmup",
+        "1cycle_momentum_max_damping_factor": "log_1cycle_momentum_max_damping_factor",
+        "1cycle_momentum_min_damping_factor_pct": "log_1cycle_momentum_min_damping_factor_pct",
+        "1cycle_beta1_max_damping_factor": "log_1cycle_beta1_max_damping_factor",
+        "1cycle_beta1_min_damping_factor_pct": "log_1cycle_beta1_min_damping_factor_pct",
+        "beta2_damping_factor": "log_beta2_damping_factor",
         "conv1_weight_decay": "log_conv1_weight_decay",
         "conv2_weight_decay": "log_conv2_weight_decay",
         "conv3_weight_decay": "log_conv3_weight_decay",
@@ -62,7 +77,7 @@ xform = ol.transforms.ToScalarSpace(
 
 mnist1 = dict(
     gen_function=gen.Schedule(
-        (512, gen.Sobol(space=space, xform=xform, seed=76)),
+        (512, gen.Sobol(space=space, xform=xform)),
     ),
     trial_function=mnist_trial1.run,
     parameter_space=space,

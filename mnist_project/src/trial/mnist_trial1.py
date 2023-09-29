@@ -79,11 +79,37 @@ def evaluate(config, verbose=0):
         "rmsprop": keras.optimizers.RMSprop,
     }
 
+    computed_config = {}
+
+    # Convert "damping factors" into momentums or betas
+    if config["optimizer"] == "sgd":
+        max_damping_factor = config["1cycle_momentum_max_damping_factor"]
+        min_damping_factor = (max_damping_factor
+                              * config["1cycle_momentum_min_damping_factor_pct"])
+        min_momentum = 1. - max_damping_factor
+        max_momentum = 1. - min_damping_factor
+        computed_config["1cycle_max_momentum"] = 1. - min_damping_factor
+        computed_config["1cycle_min_momentum_pct"] = min_momentum / max_momentum
+    elif config["optimizer"] == "adam":
+        max_beta1_damping_factor = config["1cycle_beta1_max_damping_factor"]
+        min_beta1_damping_factor = (max_beta1_damping_factor
+                              * config["1cycle_beta1_min_damping_factor_pct"])
+        min_beta1 = 1. - max_beta1_damping_factor
+        max_beta1 = 1. - min_beta1_damping_factor
+        computed_config["1cycle_max_beta1"] = 1. - min_beta1_damping_factor
+        computed_config["1cycle_min_beta1_pct"] = min_beta1 / max_beta1
+        computed_config["beta2"] = 1. - config["beta2_damping_factor"]
+    else:
+        raise ValueError(config["optimizer"])
+
     optimizer_args = {}
     if config["optimizer"] in ("sgd", "rmsprop"):
-        optimizer_args["momentum"] = config["1cycle_max_momentum"]
+        optimizer_args["momentum"] = computed_config["1cycle_max_momentum"]
     if config["optimizer"] == "sgd":
         optimizer_args["nesterov"] = config["nesterov"]
+    if config["optimizer"] == "adam":
+        optimizer_args["beta_1"] = computed_config["1cycle_max_beta1"]
+        optimizer_args["beta_2"] = computed_config["beta2"]
 
     model.compile(
         optimizer=optimizers[config["optimizer"]](
@@ -112,27 +138,39 @@ def evaluate(config, verbose=0):
                 lr2 = config["1cycle_max_lr"]
                 lr1 = config["1cycle_initial_lr_pct"] * lr2
 
-                if set_momentum:
-                    momentum1 = config["1cycle_max_momentum"]
-                    momentum2 = config["1cycle_min_momentum_pct"] * momentum1
+                if config["optimizer"] == "sgd":
+                    momentum_start = computed_config["1cycle_max_momentum"]
+                    momentum_end = computed_config["1cycle_min_momentum_pct"] * momentum_start
+                elif config["optimizer"] == "adam":
+                    beta1_start = computed_config["1cycle_max_beta1"]
+                    beta1_end = computed_config["1cycle_min_beta1_pct"] * beta1_start
+                else:
+                    raise ValueError(config["optimizer"])
             else:
                 pct = ((self.batch_idx - (warmup_pct * total_batches))
                         / ((1 - warmup_pct) * total_batches))
                 lr1 = config["1cycle_max_lr"]
                 lr2 = config["1cycle_final_lr_pct"] * lr1
 
-                if set_momentum:
-                    momentum2 = config["1cycle_max_momentum"]
-                    momentum1 = config["1cycle_min_momentum_pct"] * momentum2
+                if config["optimizer"] == "sgd":
+                    momentum_end = computed_config["1cycle_max_momentum"]
+                    momentum_start = computed_config["1cycle_min_momentum_pct"] * momentum_end
+                elif config["optimizer"] == "adam":
+                    beta1_end = computed_config["1cycle_max_beta1"]
+                    beta1_start = computed_config["1cycle_min_beta1_pct"] * beta1_end
 
             keras.backend.set_value(
                 self.model.optimizer.lr,
                 lr1 + pct * (lr2 - lr1))
 
-            if set_momentum:
+            if config["optimizer"] == "sgd":
                 keras.backend.set_value(
                     self.model.optimizer.momentum,
-                    momentum1 + pct * (momentum2 - momentum1))
+                    momentum_start + pct * (momentum_end - momentum_start))
+            elif config["optimizer"] == "adam":
+                keras.backend.set_value(
+                    self.model.optimizer.beta_1,
+                    beta1_start + pct * (beta1_end - beta1_start))
 
         def on_train_batch_end(self, batch, logs=None):
             self.batch_idx += 1
@@ -211,14 +249,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = {
-        "optimizer": "adam", "epochs": 6, "batch_size": 1360,
-        "conv1_weight_decay": 0.00033745087809545213, "conv2_weight_decay":
-        0.00016976241014781247, "conv3_weight_decay": 1.5217237815361623e-06,
-        "dense1_weight_decay": 2.077255561622722e-05, "dense2_weight_decay":
-        3.080133955890812e-05, "1cycle_initial_lr_pct": 0.10123216560356099,
-        "1cycle_final_lr_pct": 0.0006318452592530336, "1cycle_pct_warmup":
-        0.364258366888389, "1cycle_max_lr": 0.08023546878117822,
-        "conv1_channels": 12, "conv2_channels": 11, "conv3_channels": 49,
+        "optimizer": "adam",
+        "epochs": 6,
+        "batch_size": 1360,
+        "conv1_weight_decay": 0.00033745087809545213,
+        "conv2_weight_decay": 0.00016976241014781247,
+        "conv3_weight_decay": 1.5217237815361623e-06,
+        "dense1_weight_decay": 2.077255561622722e-05,
+        "dense2_weight_decay": 3.080133955890812e-05,
+        "1cycle_initial_lr_pct": 0.10123216560356099,
+        "1cycle_final_lr_pct": 0.0006318452592530336,
+        "1cycle_pct_warmup": 0.364258366888389,
+        "1cycle_max_lr": 0.08023546878117822,
+        "1cycle_beta1_max_damping_factor": 0.15,
+        "1cycle_beta1_min_damping_factor_pct": 0.33,
+        "beta2_damping_factor": 0.01,
+        "conv1_channels": 12,
+        "conv2_channels": 11,
+        "conv3_channels": 49,
         "dense1_units": 115
     }
 
