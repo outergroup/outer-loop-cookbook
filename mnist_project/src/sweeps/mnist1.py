@@ -65,6 +65,9 @@ mnist1 = dict(
         (512, gen.Sobol(space=space, xform=xform, seed=76)),
     ),
     trial_function=mnist_trial1.run,
+    parameter_space=space,
+    search_space=xform.space2,
+    search_xform=xform,
 )
 
 CONFIGS = dict(
