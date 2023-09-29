@@ -4,16 +4,27 @@ This is an example project using outerloop.
 
 Things you can do:
 
+- Generate mnist results using random configs. (This output is already stored in [mnist_project/results/](results/).)
+
+```bash
+python run_sweep.py --sweep-name mnist1
+```
+
+- Fit a GP to results, run cross-validation.
+
+```bash
+python run_cross_validation.py --sweep-name mnist1 --model-name VexprHandsOnLossModel
+```
+
+- Plot the GP results in [plot.ipynb](plot.ipynb)
+
+<!--
+
+
 - Run an individual MNIST experiment using the best known config
 
 ```bash
 python run_mnist.py
-```
-
-- Fit a GP to results, run cross-validation
-
-```bash
-python run_cross_validation.py --model-name [todo] --sweep-name [todo]
 ```
 
 - Run a distributed hyperparameter sweep on an MNIST experiment:
@@ -22,7 +33,7 @@ python run_cross_validation.py --model-name [todo] --sweep-name [todo]
 python run_sweep.py --sweep-name mnist1
 ```
 
-<!--
+
 - Run a single run of Bayesian Optimization
 
 ```bash
