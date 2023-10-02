@@ -57,10 +57,14 @@ xform = ol.transforms.ToScalarSpace(
         "1cycle_final_lr_pct": "log_1cycle_final_lr_pct",
         "1cycle_max_lr": "log_1cycle_max_lr",
         "1cycle_pct_warmup": "log_1cycle_pct_warmup",
-        "1cycle_momentum_max_damping_factor": "log_1cycle_momentum_max_damping_factor",
-        "1cycle_momentum_min_damping_factor_pct": "log_1cycle_momentum_min_damping_factor_pct",
-        "1cycle_beta1_max_damping_factor": "log_1cycle_beta1_max_damping_factor",
-        "1cycle_beta1_min_damping_factor_pct": "log_1cycle_beta1_min_damping_factor_pct",
+        "1cycle_momentum_max_damping_factor":
+        "log_1cycle_momentum_max_damping_factor",
+        "1cycle_momentum_min_damping_factor_pct":
+        "log_1cycle_momentum_min_damping_factor_pct",
+        "1cycle_beta1_max_damping_factor":
+        "log_1cycle_beta1_max_damping_factor",
+        "1cycle_beta1_min_damping_factor_pct":
+        "log_1cycle_beta1_min_damping_factor_pct",
         "beta2_damping_factor": "log_beta2_damping_factor",
         "conv1_weight_decay": "log_conv1_weight_decay",
         "conv2_weight_decay": "log_conv2_weight_decay",

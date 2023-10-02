@@ -19,8 +19,8 @@ N_HOT_PREFIX = "choice_nhot"
 
 def make_handson_kernel(space, batch_shape=()):
     """
-    This kernel attempts to group parameters into orthogonal groups, while also
-    always allowing for the model to learn to use the joint space.
+    This kernel attempts to group parameters into orthogonal groups, while
+    also always allowing for the model to learn to use the joint space.
     """
     zero_one_exclusive = partial(gpytorch.constraints.Interval,
                                  1e-6,
@@ -40,18 +40,20 @@ def make_handson_kernel(space, batch_shape=()):
     def scalar_kernel(names):
         ls_indices = ialloc.allocate(len(names))
         indices = [index_for_name(name) for name in names]
-        return ovt.matern(vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
-                                       x2[..., indices] / lengthscale[ls_indices],
-                                       p=2),
-                          nu=2.5)
+        return ovt.matern(
+            vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
+                         x2[..., indices] / lengthscale[ls_indices],
+                         p=2),
+            nu=2.5)
 
     def choice_kernel(names):
         ls_indices = ialloc.allocate(len(names))
         indices = [index_for_name(name) for name in names]
-        return ovt.matern(vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
-                                       x2[..., indices] / lengthscale[ls_indices],
-                                       p=1),
-                      nu=2.5)
+        return ovt.matern(
+            vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
+                         x2[..., indices] / lengthscale[ls_indices],
+                         p=1),
+            nu=2.5)
 
 
     def scalar_factorized_and_joint(names, suffix):
@@ -85,26 +87,30 @@ def make_handson_kernel(space, batch_shape=()):
                            for i in range(4)]),
 
             # kernel: lr schedule
-            scalar_factorized_and_joint(["log_1cycle_initial_lr", "log_1cycle_final_lr",
-                                         "log_1cycle_max_lr", "log_1cycle_pct_warmup"],
-                                        "_lr"),
+            scalar_factorized_and_joint(
+                ["log_1cycle_initial_lr", "log_1cycle_final_lr",
+                 "log_1cycle_max_lr", "log_1cycle_pct_warmup"],
+                "_lr"),
 
             # kernel: momentum schedule
-            scalar_factorized_and_joint(["log_1cycle_momentum_max_damping_factor",
-                                         "log_1cycle_momentum_min_damping_factor",
-                                         "log_1cycle_beta1_max_damping_factor",
-                                         "log_1cycle_beta1_min_damping_factor",
-                                         "log_beta2_damping_factor"],
-                                        "_momentum"),
+            scalar_factorized_and_joint(
+                ["log_1cycle_momentum_max_damping_factor",
+                 "log_1cycle_momentum_min_damping_factor",
+                 "log_1cycle_beta1_max_damping_factor",
+                 "log_1cycle_beta1_min_damping_factor",
+                 "log_beta2_damping_factor"],
+                "_momentum"),
 
             # kernel: relative weight decay
-            scalar_factorized_and_joint(["log_conv1_wd_div_gmean", "log_conv2_wd_div_gmean",
-                                         "log_conv3_wd_div_gmean", "log_dense1_wd_div_gmean",
-                                         "log_dense2_wd_div_gmean"],
-                                        "_wd"),
+            scalar_factorized_and_joint(
+                ["log_conv1_wd_div_gmean", "log_conv2_wd_div_gmean",
+                 "log_conv3_wd_div_gmean", "log_dense1_wd_div_gmean",
+                 "log_dense2_wd_div_gmean"],
+                "_wd"),
         ]
 
-    regime_joint_names = ["log_epochs", "log_batch_size", "log_gmean_weight_decay"]
+    regime_joint_names = ["log_epochs", "log_batch_size",
+                          "log_gmean_weight_decay"]
 
     def architecture_kernels():
         return [
@@ -133,7 +139,8 @@ def make_handson_kernel(space, batch_shape=()):
                      dim=-1),
         dim=-1)
     joint_kernel = vctorch.fast_prod_positive(
-        vtorch.stack(([scalar_kernel(regime_joint_names + architecture_joint_names)]
+        vtorch.stack(([scalar_kernel(regime_joint_names
+                                     + architecture_joint_names)]
                       + regime_kernels()
                       + architecture_kernels()),
                      dim=-1),
