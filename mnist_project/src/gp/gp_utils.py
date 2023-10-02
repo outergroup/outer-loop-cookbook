@@ -26,7 +26,7 @@ class ValueModule(gpytorch.Module):
         name = "raw_value"
         self.register_parameter(
             name=name,
-            parameter=torch.nn.Parameter(torch.zeros(*shape))
+            parameter=torch.nn.Parameter(torch.zeros(shape))
         )
         self.register_constraint(name, constraint)
         if prior is not None:
