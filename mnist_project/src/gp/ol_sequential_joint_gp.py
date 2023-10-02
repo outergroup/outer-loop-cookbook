@@ -89,7 +89,7 @@ def build_covar_module(space, tree, batch_shape, scale_prior):
     )
 
 
-class FullyJointLossModel(botorch.models.SingleTaskGP):
+class OLSequentialJointGP(botorch.models.SingleTaskGP):
     def __init__(self, train_X, train_Y,
                  search_space,
                  search_xform,

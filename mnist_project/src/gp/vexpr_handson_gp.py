@@ -221,7 +221,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
             return self.kernel_f(x1, x2, parameters)
 
 
-class VexprHandsOnLossModel(botorch.models.SingleTaskGP):
+class VexprHandsOnGP(botorch.models.SingleTaskGP):
     def __init__(self, train_X, train_Y,
                  search_space,
                  search_xform,
