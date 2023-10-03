@@ -37,6 +37,7 @@ def initialize(sweep_name, model_name):
     configs, trial_dirs, _ = parse_results(sweep_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device: ", device)
     X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
                                config["parameter_space"],
                                config["search_xform"],
@@ -54,6 +55,7 @@ def scenario_fit(sweep_name, model_name, trace=False):
 
     group_by_shape = False
 
+    print(f"scenario_fit: {sweep_name} {model_name}")
     if trace:
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                      record_shapes=group_by_shape) as prof:
@@ -92,7 +94,7 @@ def benchmark_fit(sweep_name, model_name, trace=False, repetitions=200):
 
     group_by_shape = False
 
-    print("training")
+    print(f"benchmark_fit: {sweep_name} {model_name}")
     if trace:
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                      record_shapes=group_by_shape) as prof:
@@ -130,30 +132,38 @@ def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
 
     group_by_shape = False
 
-    print("optimization")
-    print(f"model {model_name}, candidates size {X.shape}")
-    if trace:
+    # warmup
+    posterior = model.posterior(X)
+    loss = posterior.mean.sum()
+    loss.backward()
+    del posterior
+    del loss
 
+    print(f"benchmark_optimize: {sweep_name} {model_name} candidates size {X.shape}")
+    if trace:
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=group_by_shape) as prof:
             with record_function("optimization_test"):
                 for _ in range(repetitions):
                     posterior = model.posterior(X)
-                    loss = posterior.mean.sum() - posterior.variance.sum()
+                    loss = posterior.mean.sum()
                     loss.backward()
 
         print(prof.key_averages(group_by_input_shape=group_by_shape).table(
             sort_by="cpu_time_total", row_limit=20))
-        prof.export_chrome_trace(f"optimization_test_{sweep_name}_{model_name}.json")
+        filename = f"optimization_test_{sweep_name}_{model_name}.json"
+        prof.export_chrome_trace(filename)
+        print("Saved", filename)
 
     else:
+        # torch.cuda.set_sync_debug_mode(2)
         tstart = time.time()
         for _ in range(repetitions):
             posterior = model.posterior(X)
-            loss = posterior.mean.sum() - posterior.variance.sum()
-            # torch.cuda.set_sync_debug_mode(2)
+            loss = posterior.mean.sum()
             loss.backward()
-            # torch.cuda.set_sync_debug_mode(0)
+
         tend = time.time()
+        # torch.cuda.set_sync_debug_mode(0)
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
@@ -175,6 +185,7 @@ def scenario_optimize(sweep_name, model_name, trace=False, force_retrain=False):
         config["search_space"], config["search_xform"]
     ).transform
 
+    print(f"scenario_optimize: {sweep_name} {model_name}")
     model.eval()
     tstart = time.time()
     candidates, acq_value = botorch.optim.optimize_acqf_mixed(
