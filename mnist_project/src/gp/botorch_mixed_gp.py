@@ -11,6 +11,8 @@ from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.likelihoods.gaussian_likelihood import GaussianLikelihood
 from gpytorch.priors import GammaPrior
 
+from .gp_utils import FastStandardize
+
 N_HOT_PREFIX = "choice_nhot"
 
 
@@ -68,7 +70,7 @@ class BotorchMixedGP(botorch.models.MixedSingleTaskGP):
 
         extra_kwargs = {}
         if standardize_output:
-            extra_kwargs["outcome_transform"] = botorch.models.transforms.Standardize(
+            extra_kwargs["outcome_transform"] = FastStandardize(
                 train_Y.shape[-1],
                 batch_shape=aug_batch_shape,
             )

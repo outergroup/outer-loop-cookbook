@@ -11,6 +11,8 @@ import gpytorch
 import outerloop as ol
 import torch
 
+from .gp_utils import FastStandardize
+
 
 class DeterministicFunctionModel(botorch.models.FixedNoiseGP):
     def __init__(self, train_X, train_Y,
@@ -42,7 +44,7 @@ class DeterministicFunctionModel(botorch.models.FixedNoiseGP):
             input_transform=botorch.models.transforms.Normalize(
                 train_X.shape[-1],
                 batch_shape=aug_batch_shape),
-            outcome_transform=botorch.models.transforms.Standardize(
+            outcome_transform=FastStandardize(
                 train_Y.shape[-1],
                 batch_shape=aug_batch_shape,
             **kwargs

@@ -5,6 +5,8 @@ import gpytorch
 import outerloop as ol
 import torch
 
+from .gp_utils import FastStandardize
+
 
 N_HOT_PREFIX = "choice_nhot"
 
@@ -95,8 +97,9 @@ def make_handson_kernel(space, batch_shape=()):
 
     architecture_joint_names = ["log_gmean_channels_and_units"]
 
-    regime_kernel = gpytorch.kernels.ProductKernel(*([scalar_kernel(regime_joint_names)]
-                                             + regime_kernels()))
+    regime_kernel = gpytorch.kernels.ProductKernel(
+        *([scalar_kernel(regime_joint_names)]
+          + regime_kernels()))
     architecture_kernel = gpytorch.kernels.ProductKernel(
         *([scalar_kernel(architecture_joint_names)]
           + architecture_kernels()))
@@ -202,7 +205,7 @@ class BotorchPartialHandsOnGP(botorch.models.SingleTaskGP):
 
         extra_kwargs = {}
         if standardize_output:
-            extra_kwargs["outcome_transform"] = botorch.models.transforms.Standardize(
+            extra_kwargs["outcome_transform"] = FastStandardize(
                 train_Y.shape[-1],
                 batch_shape=aug_batch_shape,
             )

@@ -10,7 +10,7 @@ import vexpr.torch as vtorch
 import vexpr.custom.torch as vctorch
 from jax.tree_util import tree_map
 
-from .gp_utils import State, IndexAllocator
+from .gp_utils import State, IndexAllocator, FastStandardize
 
 
 
@@ -301,7 +301,7 @@ class VexprPartialHandsOnGP(botorch.models.SingleTaskGP):
 
         extra_kwargs = {}
         if standardize_output:
-            extra_kwargs["outcome_transform"] = botorch.models.transforms.Standardize(
+            extra_kwargs["outcome_transform"] = FastStandardize(
                 train_Y.shape[-1],
                 batch_shape=aug_batch_shape,
             )
