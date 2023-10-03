@@ -179,30 +179,41 @@ def make_handson_kernel(space, batch_shape=()):
 
 class VexprKernel(gpytorch.kernels.Kernel):
     def __init__(self, kernel_vexpr, state_modules, batch_shape, initialize="mean"):
-        super().__init__()
-        self.kernel_vexpr = vp.vectorize(kernel_vexpr)
+        super().__init__(batch_shape=batch_shape)
+        self.kernel_vexpr = kernel_vexpr
         self.state = torch.nn.ModuleDict(state_modules)
+        self.kernel_f = None
+        self.canary = torch.tensor(0.)
+
+    def _initialize_from_inputs(self, x1, x2):
+        inputs = {"x1": x1,
+                  "x2": x2,
+                  **{name: module.value
+                     for name, module in self.state.items()}}
+        self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
 
         def kernel_f(x1, x2, parameters):
-            return self.kernel_vexpr(x1=x1, x2=x2, **parameters)
+            return vp.eval(self.kernel_vexpr,
+                           {"x1": x1, "x2": x2, **parameters})
 
-        for _ in batch_shape:
+        for _ in self._batch_shape:
             kernel_f = torch.vmap(kernel_f,
                                   in_dims=(0, 0,
                                            {name: 0
-                                            for name in state_modules.keys()}))
+                                            for name in self.state.keys()}))
+
+        # kernel_f = torch.compile(kernel_f)
 
         self.kernel_f = kernel_f
-        self.canary = torch.tensor(0.)
 
     def _apply(self, fn):
         self = super()._apply(fn)
         self.canary = fn(self.canary)
-        self.kernel_vexpr.vexpr = tree_map(
+        self.kernel_vexpr = tree_map(
             lambda v: (fn(v)
                        if isinstance(v, torch.Tensor)
                        else v),
-            self.kernel_vexpr.vexpr)
+            self.kernel_vexpr)
         return self
 
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
@@ -213,6 +224,8 @@ class VexprKernel(gpytorch.kernels.Kernel):
                       for name, module in self.state.items()}
 
         with torch.device(self.canary.device):
+            if self.kernel_f is None:
+                self._initialize_from_inputs(x1, x2)
             return self.kernel_f(x1, x2, parameters)
 
 

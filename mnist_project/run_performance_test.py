@@ -130,8 +130,6 @@ def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
     X.requires_grad_(True)
     model.eval()
 
-    group_by_shape = False
-
     # warmup
     posterior = model.posterior(X)
     loss = posterior.mean.sum()
@@ -141,7 +139,9 @@ def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
 
     print(f"benchmark_optimize: {sweep_name} {model_name} candidates size {X.shape}")
     if trace:
-        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=group_by_shape) as prof:
+        group_by_shape = True
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                     record_shapes=group_by_shape) as prof:
             with record_function("optimization_test"):
                 for _ in range(repetitions):
                     posterior = model.posterior(X)
@@ -149,7 +149,7 @@ def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
                     loss.backward()
 
         print(prof.key_averages(group_by_input_shape=group_by_shape).table(
-            sort_by="cpu_time_total", row_limit=20))
+            sort_by="cuda_time_total", row_limit=50))
         filename = f"optimization_test_{sweep_name}_{model_name}.json"
         prof.export_chrome_trace(filename)
         print("Saved", filename)
