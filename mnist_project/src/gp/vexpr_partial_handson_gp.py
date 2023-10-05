@@ -22,10 +22,6 @@ def make_handson_kernel(space, batch_shape=()):
     This kernel attempts to group parameters into orthogonal groups, while
     also always allowing for the model to learn to use the joint space.
     """
-    zero_one_exclusive = partial(gpytorch.constraints.Interval,
-                                 1e-6,
-                                 1 - 1e-6)
-
     state = State(batch_shape)
 
     ialloc = IndexAllocator()
@@ -77,7 +73,7 @@ def make_handson_kernel(space, batch_shape=()):
             dim=-1
         )
 
-    def regime_kernels():
+    def regime_kernels(suffix):
         return [
             # kernel: regime choice parameters
             choice_kernel([f"{N_HOT_PREFIX}{i}"
@@ -87,7 +83,7 @@ def make_handson_kernel(space, batch_shape=()):
             scalar_factorized_and_joint(
                 ["log_1cycle_initial_lr", "log_1cycle_final_lr",
                  "log_1cycle_max_lr", "log_1cycle_pct_warmup"],
-                "_lr"),
+                f"_lr{suffix}"),
 
             # kernel: momentum schedule
             scalar_factorized_and_joint(
@@ -96,27 +92,27 @@ def make_handson_kernel(space, batch_shape=()):
                  "log_1cycle_beta1_max_damping_factor",
                  "log_1cycle_beta1_min_damping_factor",
                  "log_beta2_damping_factor"],
-                "_momentum"),
+                f"_momentum{suffix}"),
 
             # kernel: relative weight decay
             scalar_factorized_and_joint(
                 ["log_conv1_wd_div_gmean", "log_conv2_wd_div_gmean",
                  "log_conv3_wd_div_gmean", "log_dense1_wd_div_gmean",
                  "log_dense2_wd_div_gmean"],
-                "_wd"),
+                f"_wd{suffix}"),
         ]
 
     regime_joint_names = ["log_epochs", "log_batch_size",
                           "log_gmean_weight_decay"]
 
-    def architecture_kernels():
+    def architecture_kernels(suffix):
         return [
             # kernel: lr schedule
             scalar_factorized_and_joint(["log_conv1_channels_div_gmean",
                                          "log_conv2_channels_div_gmean",
                                          "log_conv3_channels_div_gmean",
                                          "log_dense1_units_div_gmean"],
-                                        "_units_channels"),
+                                        f"_units_channels{suffix}"),
         ]
 
     architecture_joint_names = ["log_gmean_channels_and_units"]
@@ -127,19 +123,19 @@ def make_handson_kernel(space, batch_shape=()):
     # with dim=0 here.)
     regime_kernel = vctorch.fast_prod_positive(
         vtorch.stack(([scalar_kernel(regime_joint_names)]
-                      + regime_kernels()),
+                      + regime_kernels("_factorized")),
                      dim=-1),
         dim=-1)
     architecture_kernel = vctorch.fast_prod_positive(
         vtorch.stack(([scalar_kernel(architecture_joint_names)]
-                      + architecture_kernels()),
+                      + architecture_kernels("_factorized")),
                      dim=-1),
         dim=-1)
     joint_kernel = vctorch.fast_prod_positive(
         vtorch.stack(([scalar_kernel(regime_joint_names
                                      + architecture_joint_names)]
-                      + regime_kernels()
-                      + architecture_kernels()),
+                      + regime_kernels("_joint")
+                      + architecture_kernels("_joint")),
                      dim=-1),
         dim=-1)
 

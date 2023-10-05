@@ -79,6 +79,7 @@ class State:
     def allocate(self, symbol, shape, constraint=None, prior=None, initialize=None):
         shape = self.batch_shape + shape
         name = symbol.args[0]
+        assert name not in self.modules
         self.modules[name] = ValueModule(shape, constraint, prior, initialize)
 
 
@@ -90,8 +91,6 @@ class IndexAllocator:
         ret = torch.arange(self.count, self.count + n)
         self.count += n
         return ret
-
-
 
 
 
