@@ -174,24 +174,27 @@ def make_handson_kernel(space, batch_shape=()):
 
 
 class VexprKernel(gpytorch.kernels.Kernel):
-    def __init__(self, kernel_vexpr, state_modules, batch_shape, initialize="mean"):
+    def __init__(self, kernel_vexpr, state_modules, batch_shape,
+                 initialize="mean", vectorize=True, torch_compile=False):
         super().__init__(batch_shape=batch_shape)
         self.kernel_vexpr = kernel_vexpr
         self.state = torch.nn.ModuleDict(state_modules)
         self.kernel_f = None
         self.canary = torch.tensor(0.)
+        self.vectorize = vectorize
+        self.torch_compile = torch_compile
 
     def _initialize_from_inputs(self, x1, x2):
-        selection = (0,) * len(self._batch_shape)
+        if self.vectorize:
+            selection = (0,) * len(self._batch_shape)
 
-        inputs = {"x1": x1[selection],
-                  "x2": x2[selection],
-                  **{name: module.value[selection]
-                     for name, module in self.state.items()}}
-        self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
+            inputs = {"x1": x1[selection],
+                      "x2": x2[selection],
+                      **{name: module.value[selection]
+                         for name, module in self.state.items()}}
+            self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
 
-        compile = False
-        if compile:
+        if self.torch_compile:
             kernel_f2 = vp.to_python(self.kernel_vexpr)
         else:
             kernel_f2 = partial(vp.eval, self.kernel_vexpr)
@@ -205,7 +208,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
                                            {name: 0
                                             for name in self.state.keys()}))
 
-        if compile:
+        if self.torch_compile:
             kernel_f = torch.compile(kernel_f)
 
         self.kernel_f = kernel_f
@@ -246,7 +249,9 @@ class VexprPartialHandsOnGP(botorch.models.SingleTaskGP):
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
-                 round_inputs=True):
+                 round_inputs=True,
+                 vectorize=True,
+                 torch_compile=False):
         assert train_Yvar is None
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
@@ -301,6 +306,8 @@ class VexprPartialHandsOnGP(botorch.models.SingleTaskGP):
         covar_module = VexprKernel(
             *make_handson_kernel(xform.space2, aug_batch_shape),
             batch_shape=aug_batch_shape,
+            vectorize=vectorize,
+            torch_compile=torch_compile,
         )
 
         input_transform = ol.transforms.BotorchInputTransform(xform)

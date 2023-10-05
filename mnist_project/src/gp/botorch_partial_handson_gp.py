@@ -136,8 +136,17 @@ class BotorchPartialHandsOnGP(botorch.models.SingleTaskGP):
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
-                 round_inputs=True):
+                 round_inputs=True,
+                 vectorize=False,
+                 torch_compile=False):
         assert train_Yvar is None
+        assert not vectorize
+
+        if torch_compile:
+            raise NotImplementedError(
+                "torch.compile not supported for botorch model"
+            )
+
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
         )

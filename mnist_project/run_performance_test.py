@@ -15,11 +15,15 @@ from src.gp.mnist_metrics import trial_dir_to_loss_y
 from src.scheduling import parse_results
 from src.sweeps import CONFIGS
 
+# import torch._dynamo
+# torch._dynamo.config.verbose = True
+
 gpytorch.settings.debug._set_state(False)
+# gpytorch.settings.trace_mode._set_state(True)
 botorch.settings.debug._set_state(False)
 
 
-def initialize(sweep_name, model_name):
+def initialize(sweep_name, model_name, vectorize, torch_compile):
     torch.set_default_dtype(torch.float64)
 
     config = CONFIGS[sweep_name]
@@ -32,7 +36,9 @@ def initialize(sweep_name, model_name):
     model_cls = partial(model_cls,
                         search_space=config["search_space"],
                         search_xform=config["search_xform"],
-                        round_inputs=False)
+                        round_inputs=False,
+                        vectorize=vectorize,
+                        torch_compile=torch_compile)
 
     configs, trial_dirs, _ = parse_results(sweep_name)
 
@@ -46,11 +52,13 @@ def initialize(sweep_name, model_name):
     model = model_cls(X, Y).to(device)
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(model.likelihood, model)
 
+    print(f"{sweep_name} {model_name} vectorize={vectorize} torch.compile={torch_compile}")
+
     return X, Y, model, mll, config
 
 
-def scenario_fit(sweep_name, model_name, trace=False):
-    train_X, train_Y, model, mll, config = initialize(sweep_name, model_name)
+def scenario_fit(sweep_name, model_name, train_X, train_Y, model, mll, config,
+                 trace=False):
     mll.train()
 
     group_by_shape = False
@@ -88,8 +96,8 @@ def scenario_fit(sweep_name, model_name, trace=False):
         # print(f"Mean time per iteration: {elapsed / last_result[0].step:>2f}")
 
 
-def benchmark_fit(sweep_name, model_name, trace=False, repetitions=200):
-    train_X, train_Y, model, mll, config = initialize(sweep_name, model_name)
+def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll, config,
+                  trace=False, repetitions=200):
     mll.train()
 
     group_by_shape = False
@@ -119,14 +127,15 @@ def benchmark_fit(sweep_name, model_name, trace=False, repetitions=200):
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
-def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
-    train_X, train_Y, model, mll, config = initialize(sweep_name, model_name)
-
+def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
+                       config, trace=False, repetitions=200):
     X = train_X.clone()
     Y = train_Y.clone()
 
-    # X = X.repeat(12, 1).unsqueeze(1)
+    # This tests n different sets of candidates in parallel
     X = X.unsqueeze(1)
+    # X = X.repeat(12, 1).unsqueeze(1)
+
     X.requires_grad_(True)
     model.eval()
 
@@ -137,7 +146,7 @@ def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
     del posterior
     del loss
 
-    print(f"benchmark_optimize: {sweep_name} {model_name} candidates size {X.shape}")
+    print(f"benchmark_optimize: candidates size {X.shape}")
     if trace:
         group_by_shape = True
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -167,9 +176,9 @@ def benchmark_optimize(sweep_name, model_name, trace=False, repetitions=200):
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
-def scenario_optimize(sweep_name, model_name, trace=False, force_retrain=False):
-    train_X, train_Y, model, mll, config = initialize(sweep_name, model_name)
-
+def scenario_optimize(sweep_name, model_name,
+                      train_X, train_Y, model, mll, config,
+                      trace=False, force_retrain=False):
     filename = f"performance_test_{sweep_name}_{model_name}.pt"
     retrain = force_retrain or not os.path.exists(filename)
     if retrain:
@@ -216,6 +225,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", type=str, default="VexprHandsOnLossModel")
     parser.add_argument("--sweep-name", type=str, default="mnist1")
+    parser.add_argument("--vectorize", action="store_true")
+    parser.add_argument("--compile", action="store_true")
     parser.add_argument("--trace", action="store_true")
     parser.add_argument("--repetitions", type=int, default=200)
     parser.add_argument("--force-retrain", action="store_true")
@@ -224,23 +235,35 @@ def main():
         "benchmark_fit", "benchmark_optimize", "scenario_fit", "scenario_optimize"]
     )
 
-    cmd_args = parser.parse_args()
+    args = parser.parse_args()
 
     print("gpytorch debug:", gpytorch.settings.debug.on())
     print("botorch debug:", botorch.settings.debug.on())
 
-    if cmd_args.test == "benchmark_fit":
-        benchmark_fit(sweep_name=cmd_args.sweep_name, model_name=cmd_args.model_name,
-                      trace=cmd_args.trace, repetitions=cmd_args.repetitions)
-    elif cmd_args.test == "benchmark_optimize":
-        benchmark_optimize(sweep_name=cmd_args.sweep_name, model_name=cmd_args.model_name,
-                           trace=cmd_args.trace, repetitions=cmd_args.repetitions)
-    elif cmd_args.test == "scenario_fit":
-        scenario_fit(sweep_name=cmd_args.sweep_name, model_name=cmd_args.model_name,
-                     trace=cmd_args.trace)
-    elif cmd_args.test == "scenario_optimize":
-        scenario_optimize(sweep_name=cmd_args.sweep_name, model_name=cmd_args.model_name,
-                          trace=cmd_args.trace, force_retrain=cmd_args.force_retrain)
+    if args.test == "benchmark_fit":
+        benchmark_fit(args.sweep_name, args.model_name,
+                      *initialize(args.sweep_name, args.model_name,
+                                  vectorize=args.vectorize,
+                                  torch_compile=args.compile),
+                      trace=args.trace, repetitions=args.repetitions)
+    elif args.test == "benchmark_optimize":
+        benchmark_optimize(args.sweep_name, args.model_name,
+                           *initialize(args.sweep_name, args.model_name,
+                                       vectorize=args.vectorize,
+                                       torch_compile=args.compile),
+                           trace=args.trace, repetitions=args.repetitions)
+    elif args.test == "scenario_fit":
+        scenario_fit(args.sweep_name, args.model_name,
+                     *initialize(args.sweep_name, args.model_name,
+                                 vectorize=args.vectorize,
+                                 torch_compile=args.compile),
+                     trace=args.trace)
+    elif args.test == "scenario_optimize":
+        scenario_optimize(args.sweep_name, args.model_name,
+                          *initialize(args.sweep_name, args.model_name,
+                                      vectorize=args.vectorize,
+                                      torch_compile=args.compile),
+                          trace=args.trace, force_retrain=args.force_retrain)
 
 
 if __name__ == "__main__":

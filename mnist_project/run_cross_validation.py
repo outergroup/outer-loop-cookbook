@@ -21,7 +21,8 @@ from src.scheduling import parse_results
 SMOKE_TEST = os.environ.get("SMOKE_TEST")
 
 
-def run(sweep_name, model_name, shuffle_seeds=None):
+def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
+        compile=False):
     # import logging
     # logging.basicConfig()
     # logging.getLogger().setLevel(logging.DEBUG)
@@ -42,8 +43,9 @@ def run(sweep_name, model_name, shuffle_seeds=None):
     model_cls = partial(model_cls,
                         search_space=config["search_space"],
                         search_xform=config["search_xform"],
-                        round_inputs=False)
-
+                        round_inputs=False,
+                        vectorize=vectorize,
+                        torch_compile=compile)
 
     if SMOKE_TEST:
         n_cvs = [10, 20]
@@ -105,8 +107,10 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="VexprHandsOnLossModel")
+    parser.add_argument("--model-name", type=str, default="VexprPartialHandsOnGP")
     parser.add_argument("--sweep-name", type=str, default="mnist1")
+    parser.add_argument("--vectorize", action="store_true")
+    parser.add_argument("--compile", action="store_true")
     parser.add_argument("--shuffle-seeds", type=int, default=[None], nargs="+")
 
     cmd_args = parser.parse_args()

@@ -183,31 +183,53 @@ def make_handson_kernel(space, batch_shape=()):
 
 
 class VexprKernel(gpytorch.kernels.Kernel):
-    def __init__(self, kernel_vexpr, state_modules, batch_shape, initialize="mean"):
+    def __init__(self, kernel_vexpr, state_modules, batch_shape, vectorize=True,
+                 torch_compile=False, initialize="mean"):
         super().__init__()
-        self.kernel_vexpr = vp.vectorize(kernel_vexpr)
+        self.kernel_vexpr = kernel_vexpr
         self.state = torch.nn.ModuleDict(state_modules)
+        self.kernel_f = None
+        self.canary = torch.tensor(0.)
+        self.vectorize = vectorize
+        self.torch_compile = torch_compile
+
+    def _initialize_from_inputs(self, x1, x2):
+        if self.vectorize:
+            selection = (0,) * len(self._batch_shape)
+
+            inputs = {"x1": x1[selection],
+                      "x2": x2[selection],
+                      **{name: module.value[selection]
+                         for name, module in self.state.items()}}
+            self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
+
+        if self.torch_compile:
+            kernel_f2 = vp.to_python(self.kernel_vexpr)
+        else:
+            kernel_f2 = partial(vp.eval, self.kernel_vexpr)
 
         def kernel_f(x1, x2, parameters):
-            return self.kernel_vexpr(x1=x1, x2=x2, **parameters)
+            return kernel_f2({"x1": x1, "x2": x2, **parameters})
 
-        for _ in batch_shape:
+        for _ in self._batch_shape:
             kernel_f = torch.vmap(kernel_f,
                                   in_dims=(0, 0,
                                            {name: 0
-                                            for name in state_modules.keys()}))
+                                            for name in self.state.keys()}))
+
+        if self.torch_compile:
+            kernel_f = torch.compile(kernel_f)
 
         self.kernel_f = kernel_f
-        self.canary = torch.tensor(0.)
 
     def _apply(self, fn):
         self = super()._apply(fn)
         self.canary = fn(self.canary)
-        self.kernel_vexpr.vexpr = tree_map(
+        self.kernel_vexpr = tree_map(
             lambda v: (fn(v)
                        if isinstance(v, torch.Tensor)
                        else v),
-            self.kernel_vexpr.vexpr)
+            self.kernel_vexpr)
         return self
 
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
@@ -218,6 +240,8 @@ class VexprKernel(gpytorch.kernels.Kernel):
                       for name, module in self.state.items()}
 
         with torch.device(self.canary.device):
+            if self.kernel_f is None:
+                self._initialize_from_inputs(x1, x2)
             return self.kernel_f(x1, x2, parameters)
 
 
@@ -230,7 +254,9 @@ class VexprHandsOnGP(botorch.models.SingleTaskGP):
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
-                 round_inputs=True):
+                 round_inputs=True,
+                 vectorize=True,
+                 torch_compile=False):
         assert train_Yvar is None
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y
@@ -285,6 +311,8 @@ class VexprHandsOnGP(botorch.models.SingleTaskGP):
         covar_module = VexprKernel(
             *make_handson_kernel(xform.space2, aug_batch_shape),
             batch_shape=aug_batch_shape,
+            vectorize=vectorize,
+            torch_compile=torch_compile,
         )
 
         input_transform = ol.transforms.BotorchInputTransform(xform)
