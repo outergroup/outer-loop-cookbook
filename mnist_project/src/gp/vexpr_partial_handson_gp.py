@@ -182,15 +182,22 @@ class VexprKernel(gpytorch.kernels.Kernel):
         self.canary = torch.tensor(0.)
 
     def _initialize_from_inputs(self, x1, x2):
-        inputs = {"x1": x1,
-                  "x2": x2,
-                  **{name: module.value
+        selection = (0,) * len(self._batch_shape)
+
+        inputs = {"x1": x1[selection],
+                  "x2": x2[selection],
+                  **{name: module.value[selection]
                      for name, module in self.state.items()}}
         self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
 
+        compile = False
+        if compile:
+            kernel_f2 = vp.to_python(self.kernel_vexpr)
+        else:
+            kernel_f2 = partial(vp.eval, self.kernel_vexpr)
+
         def kernel_f(x1, x2, parameters):
-            return vp.eval(self.kernel_vexpr,
-                           {"x1": x1, "x2": x2, **parameters})
+            return kernel_f2({"x1": x1, "x2": x2, **parameters})
 
         for _ in self._batch_shape:
             kernel_f = torch.vmap(kernel_f,
@@ -198,7 +205,8 @@ class VexprKernel(gpytorch.kernels.Kernel):
                                            {name: 0
                                             for name in self.state.keys()}))
 
-        # kernel_f = torch.compile(kernel_f)
+        if compile:
+            kernel_f = torch.compile(kernel_f)
 
         self.kernel_f = kernel_f
 

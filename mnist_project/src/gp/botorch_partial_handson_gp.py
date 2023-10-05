@@ -25,7 +25,7 @@ def make_handson_kernel(space, batch_shape=()):
             batch_shape=batch_shape,
             ard_num_dims=len(names),
             active_dims=[index_for_name(name) for name in names],
-            lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-04),
+            lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
             lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
         )
 
@@ -34,7 +34,7 @@ def make_handson_kernel(space, batch_shape=()):
             batch_shape=batch_shape,
             ard_num_dims=len(names),
             active_dims=[index_for_name(name) for name in names],
-            lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-06),
+            lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
             lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
         )
 
@@ -43,7 +43,7 @@ def make_handson_kernel(space, batch_shape=()):
             gpytorch.kernels.MaternKernel(
                 nu=2.5,
                 ard_num_dims=len(names),
-                lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-04),
+                lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
                 lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
             ),
             num_dims=len(names),
