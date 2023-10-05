@@ -107,7 +107,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="VexprPartialHandsOnGP")
+    parser.add_argument("--model-name", type=str, default="VexprHandsOnGP")
     parser.add_argument("--sweep-name", type=str, default="mnist1")
     parser.add_argument("--vectorize", action="store_true")
     parser.add_argument("--compile", action="store_true")

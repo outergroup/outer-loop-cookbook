@@ -67,17 +67,20 @@ def make_handson_kernel(space, batch_shape=()):
                        zero_one_exclusive(),
                        ol.priors.BetaPrior(4.0, 1.0))
         return vtorch.sum(
-            vctorch.heads_tails(alpha_factorized_or_joint)
-            * vtorch.stack([
-                vtorch.sum(
-                    w_additive
-                    * vtorch.stack([scalar_kernel([name])
-                                    for name in names],
-                                   dim=-1),
-                    dim=-1),
-                scalar_kernel(names),
-            ], dim=-1),
-            dim=-1
+            vctorch.mul_along_dim(
+                vctorch.heads_tails(alpha_factorized_or_joint),
+                vtorch.stack([
+                    vtorch.sum(
+                        vctorch.mul_along_dim(
+                            w_additive,
+                            vtorch.stack([scalar_kernel([name])
+                                          for name in names]),
+                            dim=0),
+                        dim=0),
+                    scalar_kernel(names),
+                ]),
+                dim=0),
+            dim=0
         )
 
     def regime_kernels(suffix):
@@ -124,27 +127,19 @@ def make_handson_kernel(space, batch_shape=()):
 
     architecture_joint_names = ["log_gmean_channels_and_units"]
 
-    # TODO this might be an unnecessary amount of stacking and using dim=-1. Try
-    # using lists, not stack, which implies dim=0. (Currently the vectorization
-    # code doesn't gracefully handle mixing dim=-1 in the descendent expressions
-    # with dim=0 here.)
     regime_kernel = vctorch.fast_prod_positive(
-        vtorch.stack(([scalar_kernel(regime_joint_names)]
-                      + regime_kernels("_factorized")),
-                     dim=-1),
-        dim=-1)
+        [scalar_kernel(regime_joint_names)] + regime_kernels("_factorized"),
+        dim=0)
     architecture_kernel = vctorch.fast_prod_positive(
-        vtorch.stack(([scalar_kernel(architecture_joint_names)]
-                      + architecture_kernels("_factorized")),
-                     dim=-1),
-        dim=-1)
+        [scalar_kernel(architecture_joint_names)]
+        + architecture_kernels("_factorized"),
+        dim=0)
     joint_kernel = vctorch.fast_prod_positive(
-        vtorch.stack(([scalar_kernel(regime_joint_names
-                                     + architecture_joint_names)]
-                      + regime_kernels("_joint")
-                      + architecture_kernels("_joint")),
-                     dim=-1),
-        dim=-1)
+        [scalar_kernel(regime_joint_names
+                       + architecture_joint_names)]
+        + regime_kernels("_joint")
+        + architecture_kernels("_joint"),
+        dim=0)
 
     alpha_regime_vs_architecture = vp.symbol("alpha_regime_vs_architecture")
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
@@ -161,19 +156,24 @@ def make_handson_kernel(space, batch_shape=()):
                    gpytorch.priors.GammaPrior(2.0, 0.15))
 
     kernel = (scale
-              * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint)
-                           * vtorch.stack(
+              * vtorch.sum(
+                  vctorch.mul_along_dim(
+                      vctorch.heads_tails(alpha_factorized_vs_joint),
+                      vtorch.stack(
                                [vtorch.sum(
-                                   vctorch.heads_tails(
-                                       alpha_regime_vs_architecture)
-                                   * vtorch.stack([
-                                       regime_kernel,
-                                       architecture_kernel
-                                   ], dim=-1),
-                                   dim=-1),
+                                   vctorch.mul_along_dim(
+                                       vctorch.heads_tails(
+                                           alpha_regime_vs_architecture),
+                                       vtorch.stack([
+                                           regime_kernel,
+                                           architecture_kernel
+                                       ], dim=0),
+                                       dim=0),
+                                   dim=0),
                                 joint_kernel],
-                               dim=-1),
-                           dim=-1))
+                               dim=0),
+                      dim=0),
+                  dim=0))
 
     state.allocate(lengthscale, (ialloc.count,),
                    gpytorch.constraints.GreaterThan(1e-4),
@@ -185,7 +185,7 @@ def make_handson_kernel(space, batch_shape=()):
 class VexprKernel(gpytorch.kernels.Kernel):
     def __init__(self, kernel_vexpr, state_modules, batch_shape, vectorize=True,
                  torch_compile=False, initialize="mean"):
-        super().__init__()
+        super().__init__(batch_shape=batch_shape)
         self.kernel_vexpr = kernel_vexpr
         self.state = torch.nn.ModuleDict(state_modules)
         self.kernel_f = None
