@@ -11,7 +11,7 @@ from .gp_utils import FastStandardize
 N_HOT_PREFIX = "choice_nhot"
 
 
-def make_handson_kernel(space, batch_shape=()):
+def make_handson_kernel(space, batch_shape=(), vectorize=True):
     """
     This kernel attempts to group parameters into orthogonal groups, while
     also always allowing for the model to learn to use the joint space.
@@ -39,20 +39,25 @@ def make_handson_kernel(space, batch_shape=()):
         )
 
     def scalar_factorized_and_joint(names):
-        fast_additive = gpytorch.kernels.AdditiveStructureKernel(
-            gpytorch.kernels.MaternKernel(
-                nu=2.5,
-                ard_num_dims=len(names),
-                lengthscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
-                lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
-            ),
-            num_dims=len(names),
-            active_dims=[index_for_name(name) for name in names]
-        )
+        if vectorize:
+            additive = gpytorch.kernels.AdditiveStructureKernel(
+                gpytorch.kernels.MaternKernel(
+                    nu=2.5,
+                    ard_num_dims=len(names),
+                    lengthscale_constraint=
+                    gpytorch.constraints.GreaterThan(1e-4),
+                    lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
+                ),
+                num_dims=len(names),
+                active_dims=[index_for_name(name) for name in names]
+            )
+        else:
+            additive = gpytorch.kernels.AdditiveKernel(*[scalar_kernel([name])
+                                                         for name in names])
         joint = scalar_kernel(names)
 
         return gpytorch.kernels.ScaleKernel(
-            fast_additive,
+            additive,
             outputscale_constraint=gpytorch.constraints.GreaterThan(1e-4),
             outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
         ) + joint
@@ -140,7 +145,6 @@ class BotorchPartialHandsOnGP(botorch.models.SingleTaskGP):
                  vectorize=False,
                  torch_compile=False):
         assert train_Yvar is None
-        assert not vectorize
 
         if torch_compile:
             raise NotImplementedError(
@@ -197,7 +201,8 @@ class BotorchPartialHandsOnGP(botorch.models.SingleTaskGP):
 
         xform = ol.transforms.Chain(search_space, *xforms)
 
-        covar_module = make_handson_kernel(xform.space2, aug_batch_shape)
+        covar_module = make_handson_kernel(xform.space2, aug_batch_shape,
+                                           vectorize)
 
         input_transform = ol.transforms.BotorchInputTransform(xform)
         if normalize_input:
