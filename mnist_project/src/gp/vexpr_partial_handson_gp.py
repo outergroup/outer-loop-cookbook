@@ -37,8 +37,10 @@ def make_handson_kernel(space, batch_shape=()):
         ls_indices = ialloc.allocate(len(names))
         indices = torch.tensor([index_for_name(name) for name in names])
         return ovt.matern(
-            vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
-                         x2[..., indices] / lengthscale[ls_indices],
+            vtorch.cdist(vtorch.index_select(x1, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
+                         vtorch.index_select(x2, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
                          p=2),
             nu=2.5)
 
@@ -46,8 +48,10 @@ def make_handson_kernel(space, batch_shape=()):
         ls_indices = ialloc.allocate(len(names))
         indices = torch.tensor([index_for_name(name) for name in names])
         return ovt.matern(
-            vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
-                         x2[..., indices] / lengthscale[ls_indices],
+            vtorch.cdist(vtorch.index_select(x1, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
+                         vtorch.index_select(x2, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
                          p=1),
             nu=2.5)
 
@@ -179,6 +183,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
                       **{name: module.value[selection]
                          for name, module in self.state.items()}}
             self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
+            print(self.kernel_vexpr)
 
         if self.torch_compile:
             kernel_f2 = vp.to_python(self.kernel_vexpr)

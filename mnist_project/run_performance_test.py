@@ -33,20 +33,22 @@ def initialize(sweep_name, model_name, vectorize, torch_compile):
     os.chdir(project_dir)
     sweep_dir = os.path.join(project_dir, "results", sweep_name)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device: ", device)
+    xform = config["search_xform"].to(device)
+
     model_cls = partial(model_cls,
                         search_space=config["search_space"],
-                        search_xform=config["search_xform"],
+                        search_xform=xform,
                         round_inputs=False,
                         vectorize=vectorize,
                         torch_compile=torch_compile)
 
     configs, trial_dirs, _ = parse_results(sweep_name)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device: ", device)
     X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
                                config["parameter_space"],
-                               config["search_xform"],
+                               xform,
                                device=device)
 
     model = model_cls(X, Y).to(device)

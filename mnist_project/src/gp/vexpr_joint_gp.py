@@ -43,23 +43,29 @@ def make_botorch_range_choice_kernel(space, batch_shape=()):
             nhot_indices.append(i)
         else:
             range_indices.append(i)
+    range_indices = torch.tensor(range_indices)
+    nhot_indices = torch.tensor(nhot_indices)
 
     def range_kernel():
         ls_indices = ialloc.allocate(len(range_indices))
-        return ovt.matern(vtorch.cdist(x1[..., range_indices]
-                                       / lengthscale[ls_indices],
-                                       x2[..., range_indices]
-                                       / lengthscale[ls_indices],
-                                       p=2),
-                          nu=2.5)
+        return ovt.matern(
+            vtorch.cdist(
+                vtorch.index_select(x1, -1, range_indices)
+                / vtorch.index_select(lengthscale, -1, ls_indices),
+                vtorch.index_select(x2, -1, range_indices)
+                / vtorch.index_select(lengthscale, -1, ls_indices)),
+            nu=2.5)
 
     def nhot_kernel():
         ls_indices = ialloc.allocate(len(nhot_indices))
-        return vtorch.exp(-vtorch.cdist(x1[..., nhot_indices]
-                                        / lengthscale[ls_indices],
-                                        x2[..., nhot_indices]
-                                        / lengthscale[ls_indices],
-                                        p=1))
+        return vtorch.exp(
+            -vtorch.cdist(
+                vtorch.index_select(x1, -1, nhot_indices)
+                / vtorch.index_select(lengthscale, -1, ls_indices),
+                vtorch.index_select(x2, -1, nhot_indices)
+                / vtorch.index_select(lengthscale, -1, ls_indices),
+                p=1)
+        )
 
     alpha_range_vs_nhot = vp.symbol("alpha_range_vs_nhot")
     state.allocate(alpha_range_vs_nhot, (),
@@ -142,8 +148,12 @@ class VexprFullyJointGP(botorch.models.SingleTaskGP):
                  standardize_output=True,
                  # disable when you know all your data is valid to improve
                  # performance (e.g. during cross-validation)
-                 round_inputs=True):
+                 round_inputs=True,
+                 vectorize=True,
+                 torch_compile=False):
         assert train_Yvar is None
+        assert vectorize
+        assert not torch_compile
 
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
             train_X=train_X, train_Y=train_Y

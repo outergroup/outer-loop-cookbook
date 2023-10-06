@@ -39,19 +39,23 @@ def make_handson_kernel(space, batch_shape=()):
 
     def scalar_kernel(names):
         ls_indices = ialloc.allocate(len(names))
-        indices = [index_for_name(name) for name in names]
+        indices = torch.tensor([index_for_name(name) for name in names])
         return ovt.matern(
-            vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
-                         x2[..., indices] / lengthscale[ls_indices],
+            vtorch.cdist(vtorch.index_select(x1, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
+                         vtorch.index_select(x2, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
                          p=2),
             nu=2.5)
 
     def choice_kernel(names):
         ls_indices = ialloc.allocate(len(names))
-        indices = [index_for_name(name) for name in names]
+        indices = torch.tensor([index_for_name(name) for name in names])
         return ovt.matern(
-            vtorch.cdist(x1[..., indices] / lengthscale[ls_indices],
-                         x2[..., indices] / lengthscale[ls_indices],
+            vtorch.cdist(vtorch.index_select(x1, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
+                         vtorch.index_select(x2, -1, indices)
+                         / vtorch.index_select(lengthscale, -1, ls_indices),
                          p=1),
             nu=2.5)
 
