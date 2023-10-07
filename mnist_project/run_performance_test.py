@@ -35,11 +35,13 @@ def initialize(sweep_name, model_name, vectorize, torch_compile):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device: ", device)
-    xform = config["search_xform"].to(device)
+
+    search_space = config["search_space"]
+    search_xform = config["search_xform"].to(device)
 
     model_cls = partial(model_cls,
-                        search_space=config["search_space"],
-                        search_xform=xform,
+                        search_space=search_space,
+                        search_xform=search_xform,
                         round_inputs=False,
                         vectorize=vectorize,
                         torch_compile=torch_compile)
@@ -48,7 +50,7 @@ def initialize(sweep_name, model_name, vectorize, torch_compile):
 
     X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
                                config["parameter_space"],
-                               xform,
+                               search_xform,
                                device=device)
 
     model = model_cls(X, Y).to(device)
@@ -56,11 +58,11 @@ def initialize(sweep_name, model_name, vectorize, torch_compile):
 
     print(f"{sweep_name} {model_name} vectorize={vectorize} torch.compile={torch_compile}")
 
-    return X, Y, model, mll, config
+    return X, Y, model, mll, search_space, search_xform
 
 
-def scenario_fit(sweep_name, model_name, train_X, train_Y, model, mll, config,
-                 trace=False):
+def scenario_fit(sweep_name, model_name, train_X, train_Y, model, mll,
+                 search_space, search_xform, trace=False):
     mll.train()
 
     group_by_shape = False
@@ -98,8 +100,8 @@ def scenario_fit(sweep_name, model_name, train_X, train_Y, model, mll, config,
         # print(f"Mean time per iteration: {elapsed / last_result[0].step:>2f}")
 
 
-def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll, config,
-                  trace=False, repetitions=200):
+def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll,
+                  search_space, search_xform, trace=False, repetitions=200):
     mll.train()
 
     group_by_shape = False
@@ -130,7 +132,7 @@ def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll, config,
 
 
 def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
-                       config, trace=False, repetitions=200):
+                       search_space, search_xform, trace=False, repetitions=200):
     X = train_X.clone()
     Y = train_Y.clone()
 
@@ -178,9 +180,9 @@ def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
-def scenario_optimize(sweep_name, model_name,
-                      train_X, train_Y, model, mll, config,
-                      trace=False, force_retrain=False):
+def scenario_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
+                      search_space, search_xform, trace=False,
+                      force_retrain=False):
     filename = f"performance_test_{sweep_name}_{model_name}.pt"
     retrain = force_retrain or not os.path.exists(filename)
     if retrain:
@@ -193,7 +195,7 @@ def scenario_optimize(sweep_name, model_name,
         mll.load_state_dict(torch.load(filename))
 
     rounding_function = ol.transforms.UntransformThenTransform(
-        config["search_space"], config["search_xform"]
+        search_space, search_xform,
     ).transform
 
     print(f"scenario_optimize: {sweep_name} {model_name}")
@@ -201,16 +203,16 @@ def scenario_optimize(sweep_name, model_name,
     tstart = time.time()
     candidates, acq_value = botorch.optim.optimize_acqf_mixed(
         acq_function=botorch.acquisition.qNoisyExpectedImprovement(
-                    model=model,
-                    X_baseline=train_X,
-                    sampler=botorch.sampling.SobolQMCNormalSampler(
-                        sample_shape=torch.Size([64])
-                    ),
-                    objective=botorch.acquisition.GenericMCObjective(
+            model=model,
+            X_baseline=train_X,
+            sampler=botorch.sampling.SobolQMCNormalSampler(
+                sample_shape=torch.Size([64])
+            ),
+            objective=botorch.acquisition.GenericMCObjective(
                         lambda Z: -Z[..., 0])
-                ),
-        bounds=ol.botorch_bounds(config["search_space"]),
-        fixed_features_list=ol.all_base_configurations(config["search_space"]),
+        ),
+        bounds=ol.botorch_bounds(search_space).to(train_X.device),
+        fixed_features_list=ol.all_base_configurations(search_space),
         q=1,
         num_restarts=10, #60,
         raw_samples=64, #1024,
