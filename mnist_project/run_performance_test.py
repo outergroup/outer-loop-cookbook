@@ -18,7 +18,10 @@ from src.sweeps import CONFIGS
 # import torch._dynamo
 # torch._dynamo.config.verbose = True
 
+import linear_operator
+
 gpytorch.settings.debug._set_state(False)
+linear_operator.settings.debug._set_state(False)
 # gpytorch.settings.trace_mode._set_state(True)
 botorch.settings.debug._set_state(False)
 
@@ -66,7 +69,6 @@ def scenario_fit(sweep_name, model_name, train_X, train_Y, model, mll,
     mll.train()
 
     group_by_shape = False
-
     print(f"scenario_fit: {sweep_name} {model_name}")
     if trace:
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -104,8 +106,16 @@ def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll,
                   search_space, search_xform, trace=False, repetitions=200):
     mll.train()
 
-    group_by_shape = False
+    # warmup
+    output = model(train_X)
+    loss = -mll(output, train_Y.squeeze(-1))
+    loss.sum().backward()
+    del output
+    del loss
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
+    group_by_shape = False
     print(f"benchmark_fit: {sweep_name} {model_name}")
     if trace:
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -127,6 +137,8 @@ def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll,
             # torch.cuda.set_sync_debug_mode(0)
             loss = -mll(output, train_Y.squeeze(-1))
             loss.sum().backward()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         tend = time.time()
         print(f"Elapsed time: {tend - tstart:>2f}")
 
@@ -149,6 +161,8 @@ def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
     loss.backward()
     del posterior
     del loss
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
     print(f"benchmark_optimize: candidates size {X.shape}")
     if trace:
@@ -174,6 +188,8 @@ def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
             posterior = model.posterior(X)
             loss = posterior.mean.sum()
             loss.backward()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         tend = time.time()
         # torch.cuda.set_sync_debug_mode(0)
@@ -193,6 +209,13 @@ def scenario_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
     else:
         mll.train()
         mll.load_state_dict(torch.load(filename))
+        # warmup
+        posterior = model.posterior(train_X.unsqueeze(1))
+        loss = posterior.mean.sum()
+        loss.backward()
+        del posterior
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     rounding_function = ol.transforms.UntransformThenTransform(
         search_space, search_xform,
@@ -200,27 +223,48 @@ def scenario_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
 
     print(f"scenario_optimize: {sweep_name} {model_name}")
     model.eval()
-    tstart = time.time()
-    candidates, acq_value = botorch.optim.optimize_acqf_mixed(
-        acq_function=botorch.acquisition.qNoisyExpectedImprovement(
-            model=model,
-            X_baseline=train_X,
-            sampler=botorch.sampling.SobolQMCNormalSampler(
-                sample_shape=torch.Size([64])
+
+    def f():
+        candidates, acq_value = botorch.optim.optimize_acqf_mixed(
+            acq_function=botorch.acquisition.qNoisyExpectedImprovement(
+                model=model,
+                X_baseline=train_X,
+                sampler=botorch.sampling.SobolQMCNormalSampler(
+                    sample_shape=torch.Size([256])
+                    # sample_shape=torch.Size([64])
+                ),
+                objective=botorch.acquisition.GenericMCObjective(
+                            lambda Z: -Z[..., 0]),
             ),
-            objective=botorch.acquisition.GenericMCObjective(
-                        lambda Z: -Z[..., 0])
-        ),
-        bounds=ol.botorch_bounds(search_space).to(train_X.device),
-        fixed_features_list=ol.all_base_configurations(search_space),
-        q=1,
-        num_restarts=10, #60,
-        raw_samples=64, #1024,
-        # inequality_constraints=ol.botorch_inequality_constraints(config["constraints"]),
-        post_processing_func=rounding_function,
-    )
-    tend = time.time()
-    print(f"Elapsed time: {tend - tstart:>2f}, acq_value: {acq_value}")
+            bounds=ol.botorch_bounds(search_space).to(train_X.device),
+            fixed_features_list=ol.all_base_configurations(search_space),
+            q=1,
+            num_restarts=60,
+            raw_samples=1024,
+            # num_restarts=10, #60,
+            # raw_samples=64, #1024,
+            # inequality_constraints=ol.botorch_inequality_constraints(config["constraints"]),
+            post_processing_func=rounding_function,
+        )
+
+        return candidates, acq_value
+
+    if trace:
+        group_by_shape = True
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                     record_shapes=group_by_shape) as prof:
+            with record_function("optimization_test"):
+                f()
+        print(prof.key_averages(group_by_input_shape=group_by_shape).table(
+            sort_by="cuda_time_total", row_limit=50))
+        filename = f"scenario_optimize_{sweep_name}_{model_name}.json"
+        prof.export_chrome_trace(filename)
+        print("Saved", filename)
+    else:
+        tstart = time.time()
+        candidates, acq_value = f()
+        tend = time.time()
+        print(f"Elapsed time: {tend - tstart:>2f}, acq_value: {acq_value}")
 
 
 def main():
@@ -242,6 +286,7 @@ def main():
     args = parser.parse_args()
 
     print("gpytorch debug:", gpytorch.settings.debug.on())
+    print("linear_operator debug:", linear_operator.settings.debug.on())
     print("botorch debug:", botorch.settings.debug.on())
 
     if args.test == "benchmark_fit":
