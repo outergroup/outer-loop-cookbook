@@ -35,7 +35,6 @@ class BotorchMixedGP(botorch.models.MixedSingleTaskGP):
                  vectorize=False,
                  torch_compile=False):
         assert train_Yvar is None
-        assert not vectorize
 
         if torch_compile:
             raise NotImplementedError(

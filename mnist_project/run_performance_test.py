@@ -143,6 +143,61 @@ def benchmark_fit(sweep_name, model_name, train_X, train_Y, model, mll,
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
+def benchmark_covariance_optimize(sweep_name, model_name, train_X, train_Y,
+                                  model, mll, search_space, search_xform,
+                                  trace=False, repetitions=200):
+    """
+    Benchmark the covariance kernel forward and backward pass, using input
+    shapes that are representative of what would be seen during Bayesian
+    Optimization.
+    """
+    model.eval()
+
+    x1 = torch.randn((60, 2, 26), device=train_X.device,
+                     requires_grad=True)
+    x2 = torch.randn((60, 381, 26), device=train_X.device,
+                     requires_grad=True)
+
+    def f():
+        with gpytorch.settings.lazily_evaluate_kernels(False):
+            cov = model.covar_module(x1, x2).to_dense()
+            loss = cov.sum()
+            loss.backward()
+
+    # warmup
+    f()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    print(f"benchmark_optimize_covariance: covar {x1.shape} {x2.shape}")
+    if trace:
+        group_by_shape = True
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                     record_shapes=group_by_shape) as prof:
+            with record_function("optimization_test"):
+                for _ in range(repetitions):
+                    f()
+
+        print(prof.key_averages(group_by_input_shape=group_by_shape).table(
+            sort_by="cuda_time_total", row_limit=50))
+        filename = f"benchmark_covariance_optimize_{sweep_name}_{model_name}.json"
+        prof.export_chrome_trace(filename)
+        print("Saved", filename)
+
+    else:
+        # torch.cuda.set_sync_debug_mode(2)
+        tstart = time.time()
+        for _ in range(repetitions):
+            f()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        tend = time.time()
+        # torch.cuda.set_sync_debug_mode(0)
+        print(f"Elapsed time: {tend - tstart:>2f}")
+
+
 def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
                        search_space, search_xform, trace=False, repetitions=200):
     X = train_X.clone()
@@ -280,8 +335,8 @@ def main():
     parser.add_argument("--force-retrain", action="store_true")
 
     parser.add_argument("--test", type=str, default="benchmark_fit", choices=[
-        "benchmark_fit", "benchmark_optimize", "scenario_fit", "scenario_optimize"]
-    )
+        "benchmark_fit", "benchmark_optimize", "benchmark_covariance_optimize",
+        "scenario_fit", "scenario_optimize"])
 
     args = parser.parse_args()
 
@@ -301,6 +356,13 @@ def main():
                                        vectorize=args.vectorize,
                                        torch_compile=args.compile),
                            trace=args.trace, repetitions=args.repetitions)
+
+    elif args.test == "benchmark_covariance_optimize":
+        benchmark_covariance_optimize(args.sweep_name, args.model_name,
+                                      *initialize(args.sweep_name, args.model_name,
+                                                  vectorize=args.vectorize,
+                                                  torch_compile=args.compile),
+                                      trace=args.trace, repetitions=args.repetitions)
     elif args.test == "scenario_fit":
         scenario_fit(args.sweep_name, args.model_name,
                      *initialize(args.sweep_name, args.model_name,
