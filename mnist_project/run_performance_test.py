@@ -198,6 +198,218 @@ def benchmark_covariance_optimize(sweep_name, model_name, train_X, train_Y,
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
+
+def benchmark_covariance_fit(sweep_name, model_name, train_X, train_Y,
+                             model, mll, search_space, search_xform,
+                             trace=False, repetitions=200):
+    """
+    """
+    model.train()
+
+    transformed_train_X = model.transform_inputs(train_X)
+
+    def f():
+        with gpytorch.settings.lazily_evaluate_kernels(False):
+            cov = model.covar_module(transformed_train_X).to_dense()
+            loss = cov.sum()
+            loss.backward()
+
+    # warmup
+    with gpytorch.settings.lazily_evaluate_kernels(False):
+        f()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    X_shape = transformed_train_X.shape
+    print(f"benchmark_covariance_fit: covar {X_shape} {X_shape}")
+    if trace:
+        group_by_shape = True
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                     record_shapes=group_by_shape) as prof:
+            with record_function("benchmark_covariance_fit"):
+                for _ in range(repetitions):
+                    f()
+
+        print(prof.key_averages(group_by_input_shape=group_by_shape).table(
+            sort_by="cuda_time_total", row_limit=50))
+        filename = f"benchmark_covariance_fit_{sweep_name}_{model_name}.json"
+        prof.export_chrome_trace(filename)
+        print("Saved", filename)
+
+    else:
+        # torch.cuda.set_sync_debug_mode(2)
+        tstart = time.time()
+        for _ in range(repetitions):
+            f()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        tend = time.time()
+        # torch.cuda.set_sync_debug_mode(0)
+        print(f"Elapsed time: {tend - tstart:>2f}")
+
+
+def cv_initialize(sweep_name, model_name, vectorize, torch_compile):
+    torch.set_default_dtype(torch.float64)
+
+    config = CONFIGS[sweep_name]
+    model_cls = MODELS[model_name]
+
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(project_dir)
+    sweep_dir = os.path.join(project_dir, "results", sweep_name)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device: ", device)
+
+    search_space = config["search_space"]
+    search_xform = config["search_xform"].to(device)
+
+    model_cls = partial(model_cls,
+                        search_space=search_space,
+                        search_xform=search_xform,
+                        round_inputs=False,
+                        vectorize=vectorize,
+                        torch_compile=torch_compile)
+
+    configs, trial_dirs, _ = parse_results(sweep_name)
+
+    X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
+                               config["parameter_space"],
+                               search_xform,
+                               device=device)
+
+    from botorch.cross_validation import gen_loo_cv_folds
+    n_cv = 120
+    cv_folds = gen_loo_cv_folds(train_X=X[:n_cv], train_Y=Y[:n_cv])
+
+    model = model_cls(cv_folds.train_X, cv_folds.train_Y).to(device)
+    mll = gpytorch.mlls.ExactMarginalLogLikelihood(model.likelihood, model)
+
+    print(f"{sweep_name} {model_name} vectorize={vectorize} torch.compile={torch_compile}")
+
+    return cv_folds.train_X, cv_folds.train_Y, model, mll, search_space, search_xform
+
+
+def benchmark_covariance_cross_validate(
+        sweep_name, model_name, train_X,
+        train_Y, model, mll, search_space, search_xform, trace=False,
+        repetitions=200):
+    """
+    """
+
+    model.train()
+
+    transformed_train_X = model.transform_inputs(train_X)
+
+    def f():
+        with gpytorch.settings.lazily_evaluate_kernels(False):
+            cov = model.covar_module(transformed_train_X).to_dense()
+            loss = cov.sum()
+            loss.backward()
+
+    # warmup
+    with gpytorch.settings.lazily_evaluate_kernels(False):
+        f()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    X_shape = transformed_train_X.shape
+    print(f"benchmark_covariance_cross_validate: covar {X_shape} {X_shape}")
+    if trace:
+        group_by_shape = True
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                     # record_shapes=group_by_shape
+                     ) as prof:
+            with record_function("benchmark_covariance_fit"):
+                for _ in range(repetitions):
+                    f()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        print(prof.key_averages(group_by_input_shape=group_by_shape).table(
+            sort_by="cuda_time_total", row_limit=50))
+        filename = f"benchmark_covariance_cross_validate_{sweep_name}_{model_name}.json"
+        prof.export_chrome_trace(filename)
+        print("Saved", filename)
+
+    else:
+        # torch.cuda.set_sync_debug_mode(2)
+        tstart = time.time()
+        for _ in range(repetitions):
+            f()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        tend = time.time()
+        # torch.cuda.set_sync_debug_mode(0)
+        print(f"Elapsed time: {tend - tstart:>2f}")
+
+
+def benchmark_gp_cross_validate(
+        sweep_name, model_name, train_X,
+        train_Y, model, mll, search_space, search_xform, trace=False,
+        repetitions=200):
+    """
+    """
+
+    model.train()
+
+    # grad_log = []
+
+    def f():
+        with gpytorch.settings.lazily_evaluate_kernels(False):
+            output = model(train_X)
+            loss = -mll(output, train_Y.squeeze(-1))
+            loss.sum().backward()
+            # grad_log.append([t.grad.cpu().clone() for t in list(model.parameters())])
+
+    # warmup
+    with gpytorch.settings.lazily_evaluate_kernels(False):
+        f()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    X_shape = train_X.shape
+    print(f"benchmark_gp_cross_validate: covar {X_shape} {X_shape}")
+    if trace:
+        group_by_shape = True
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                     # record_shapes=group_by_shape
+                     ) as prof:
+            with record_function("benchmark_gp_cross_validate"):
+                for _ in range(repetitions):
+                    f()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        print(prof.key_averages(group_by_input_shape=group_by_shape).table(
+            sort_by="cuda_time_total", row_limit=50))
+        filename = f"benchmark_gp_cross_validate_{sweep_name}_{model_name}.json"
+        prof.export_chrome_trace(filename)
+        print("Saved", filename)
+
+    else:
+        # torch.cuda.set_sync_debug_mode(2)
+        tstart = time.time()
+        for _ in range(repetitions):
+            f()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        tend = time.time()
+        # torch.cuda.set_sync_debug_mode(0)
+        print(f"Elapsed time: {tend - tstart:>2f}")
+
+    # device_str = ("cuda" if torch.cuda.is_available() else "cpu")
+    # filename = f"grad_log_{sweep_name}_{model_name}_{device_str}.pt"
+    # print("Saving", filename)
+    # torch.save(grad_log, filename)
+
+
 def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
                        search_space, search_xform, trace=False, repetitions=200):
     X = train_X.clone()
@@ -336,7 +548,8 @@ def main():
 
     parser.add_argument("--test", type=str, default="benchmark_fit", choices=[
         "benchmark_fit", "benchmark_optimize", "benchmark_covariance_optimize",
-        "scenario_fit", "scenario_optimize"])
+        "benchmark_covariance_fit", "scenario_fit", "scenario_optimize",
+        "benchmark_covariance_cross_validate", "benchmark_gp_cross_validate"])
 
     args = parser.parse_args()
 
@@ -363,6 +576,26 @@ def main():
                                                   vectorize=args.vectorize,
                                                   torch_compile=args.compile),
                                       trace=args.trace, repetitions=args.repetitions)
+    elif args.test == "benchmark_covariance_fit":
+        benchmark_covariance_fit(args.sweep_name, args.model_name,
+                                 *initialize(args.sweep_name, args.model_name,
+                                             vectorize=args.vectorize,
+                                             torch_compile=args.compile),
+                                 trace=args.trace, repetitions=args.repetitions)
+    elif args.test == "benchmark_covariance_cross_validate":
+        benchmark_covariance_cross_validate(
+            args.sweep_name, args.model_name,
+            *cv_initialize(args.sweep_name, args.model_name,
+                           vectorize=args.vectorize,
+                           torch_compile=args.compile),
+            trace=args.trace, repetitions=args.repetitions)
+    elif args.test == "benchmark_gp_cross_validate":
+        benchmark_gp_cross_validate(
+            args.sweep_name, args.model_name,
+            *cv_initialize(args.sweep_name, args.model_name,
+                           vectorize=args.vectorize,
+                           torch_compile=args.compile),
+            trace=args.trace, repetitions=args.repetitions)
     elif args.test == "scenario_fit":
         scenario_fit(args.sweep_name, args.model_name,
                      *initialize(args.sweep_name, args.model_name,

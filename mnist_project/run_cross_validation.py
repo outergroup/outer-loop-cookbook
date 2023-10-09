@@ -22,7 +22,7 @@ SMOKE_TEST = os.environ.get("SMOKE_TEST")
 
 
 def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
-        compile=False):
+        compile=False, trace=False):
     # import logging
     # logging.basicConfig()
     # logging.getLogger().setLevel(logging.DEBUG)
@@ -40,9 +40,13 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
     os.chdir(project_dir)
     sweep_dir = os.path.join(project_dir, "results", sweep_name)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    search_space = config["search_space"]
+    search_xform = config["search_xform"].to(device)
+
     model_cls = partial(model_cls,
-                        search_space=config["search_space"],
-                        search_xform=config["search_xform"],
+                        search_space=search_space,
+                        search_xform=search_xform,
                         round_inputs=False,
                         vectorize=vectorize,
                         torch_compile=compile)
@@ -59,10 +63,9 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
             random.Random(shuffle_seed).shuffle(shuffled)
             configs, trial_dirs = zip(*shuffled)
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
                                    config["parameter_space"],
-                                   config["search_xform"],
+                                   search_xform,
                                    device=device)
 
         suffix = ""
@@ -80,17 +83,38 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
             # def callback(parameters, result):
             #     optimization_log.append((copy.deepcopy(parameters), result))
 
-            cv_results = batch_cross_validation(
-                model_cls=model_cls,
-                mll_cls=gpytorch.mlls.ExactMarginalLogLikelihood,
-                cv_folds=cv_folds,
-                observation_noise=True,
-                # fit_args=dict(
-                #     optimizer_kwargs=dict(
-                #         callback=callback
-                #     )
-                # )
-            )
+            if trace:
+                from torch.profiler import profile, record_function, ProfilerActivity
+                group_by_shape = False
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                             record_shapes=group_by_shape) as prof:
+                    with record_function("batch_cross_validation"):
+                        cv_results = batch_cross_validation(
+                            model_cls=model_cls,
+                            mll_cls=gpytorch.mlls.ExactMarginalLogLikelihood,
+                            cv_folds=cv_folds,
+                            observation_noise=True,
+                        )
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+
+                print(prof.key_averages(group_by_input_shape=group_by_shape).table(
+                    sort_by="cuda_time_total", row_limit=50))
+                filename = f"cross_validation_{sweep_name}_{model_name}_{n_cv}.json"
+                prof.export_chrome_trace(filename)
+                print("Saved", filename)
+            else:
+                cv_results = batch_cross_validation(
+                    model_cls=model_cls,
+                    mll_cls=gpytorch.mlls.ExactMarginalLogLikelihood,
+                    cv_folds=cv_folds,
+                    observation_noise=True,
+                    # fit_args=dict(
+                    #     optimizer_kwargs=dict(
+                    #         callback=callback
+                    #     )
+                    # )
+                )
 
             filename = os.path.join(result_dir, f"cv-{sweep_name}-{model_name}{suffix}-{n_cv}.pt")
             result = {
@@ -112,6 +136,7 @@ def main():
     parser.add_argument("--vectorize", action="store_true")
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--shuffle-seeds", type=int, default=[None], nargs="+")
+    parser.add_argument("--trace", action="store_true")
 
     cmd_args = parser.parse_args()
     run(**vars(cmd_args))

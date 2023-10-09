@@ -39,16 +39,19 @@ def run(sweep_name, model_name, trace=False):
     os.chdir(project_dir)
     sweep_dir = os.path.join(project_dir, "results", sweep_name)
 
+    search_space = config["search_space"]
+    search_xform = config["search_xform"].to(device)
+
     model_cls = partial(model_cls,
-                        search_space=mnist1.xform.space2,
-                        search_xform=mnist1.xform,
+                        search_space=search_space,
+                        search_xform=search_xform,
                         round_inputs=False)
 
     configs, trial_dirs, _ = parse_results(sweep_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     X, Y = configs_dirs_to_X_Y(configs, trial_dirs, trial_dir_to_loss_y,
-                               mnist1.space, mnist1.xform, device=device)
+                               search_space, search_xform, device=device)
 
     n_cv = 5
     cv_folds = gen_loo_cv_folds(train_X=X[:n_cv], train_Y=Y[:n_cv])
@@ -63,8 +66,9 @@ def run(sweep_name, model_name, trace=False):
                     model_cls=model_cls,
                     mll_cls=gpytorch.mlls.ExactMarginalLogLikelihood,
                     cv_folds=cv_folds,
+                    observation_noise=True,
                 )
-        print(prof.key_averages(group_by_input_shape=group_by_shape).table(sort_by="cpu_time_total",
+        print(prof.key_averages(group_by_input_shape=group_by_shape).table(sort_by="cuda_time_total",
                                                                            row_limit=20))
         filename = f"cross_validate-{model_name}.json"
         prof.export_chrome_trace(filename)
