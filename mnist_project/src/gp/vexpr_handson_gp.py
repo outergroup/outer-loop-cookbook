@@ -21,6 +21,13 @@ def make_handson_kernel(space, batch_shape=()):
     """
     This kernel attempts to group parameters into orthogonal groups, while
     also always allowing for the model to learn to use the joint space.
+
+    This method stores vectors in dim=-1 before the cdist, and on dim=-3 after
+    the cdist. This tensor shaping is inherited from cdist's input and output
+    scheme. dim=-3 corresponds to dim=0, except when running in batch mode.
+    Ideally this code would use dim=0 and rely on torch.vmap to hide the
+    batching complexity, but torch.vmap does not yet work with torch.compile.
+    https://github.com/pytorch/pytorch/issues/98822
     """
     zero_one_exclusive = partial(gpytorch.constraints.Interval,
                                  1e-6,
@@ -40,25 +47,27 @@ def make_handson_kernel(space, batch_shape=()):
     def scalar_kernel(names):
         ls_indices = ialloc.allocate(len(names))
         indices = torch.tensor([index_for_name(name) for name in names])
+        ls = vtorch.unsqueeze(vtorch.index_select(lengthscale, -1, ls_indices),
+                              -2)
         return ovt.matern(
             vtorch.cdist(vtorch.index_select(x1, -1, indices)
-                         / vtorch.index_select(lengthscale, -1, ls_indices),
+                         / ls,
                          vtorch.index_select(x2, -1, indices)
-                         / vtorch.index_select(lengthscale, -1, ls_indices),
+                         / ls,
                          p=2),
             nu=2.5)
 
     def choice_kernel(names):
         ls_indices = ialloc.allocate(len(names))
         indices = torch.tensor([index_for_name(name) for name in names])
-        return ovt.matern(
-            vtorch.cdist(vtorch.index_select(x1, -1, indices)
-                         / vtorch.index_select(lengthscale, -1, ls_indices),
-                         vtorch.index_select(x2, -1, indices)
-                         / vtorch.index_select(lengthscale, -1, ls_indices),
-                         p=1),
-            nu=2.5)
-
+        ls = vtorch.unsqueeze(vtorch.index_select(lengthscale, -1, ls_indices),
+                              -2)
+        return vtorch.exp(
+            -vtorch.cdist(vtorch.index_select(x1, -1, indices)
+                          / ls,
+                          vtorch.index_select(x2, -1, indices)
+                          / ls,
+                          p=1))
 
     def scalar_factorized_and_joint(names, suffix):
         w_additive = vp.symbol("w_additive" + suffix)
@@ -67,9 +76,10 @@ def make_handson_kernel(space, batch_shape=()):
         state.allocate(w_additive, (len(names),),
                        zero_one_exclusive(),
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
-        state.allocate(alpha_factorized_or_joint, (),
+        state.allocate(alpha_factorized_or_joint, (1,),
                        zero_one_exclusive(),
                        ol.priors.BetaPrior(4.0, 1.0))
+
         return vtorch.sum(
             vctorch.mul_along_dim(
                 vctorch.heads_tails(alpha_factorized_or_joint),
@@ -78,13 +88,14 @@ def make_handson_kernel(space, batch_shape=()):
                         vctorch.mul_along_dim(
                             w_additive,
                             vtorch.stack([scalar_kernel([name])
-                                          for name in names]),
-                            dim=0),
-                        dim=0),
+                                          for name in names],
+                                         dim=-3),
+                            dim=-3),
+                        dim=-3),
                     scalar_kernel(names),
-                ]),
-                dim=0),
-            dim=0
+                ], dim=-3),
+                dim=-3),
+            dim=-3
         )
 
     def regime_kernels(suffix):
@@ -132,52 +143,57 @@ def make_handson_kernel(space, batch_shape=()):
     architecture_joint_names = ["log_gmean_channels_and_units"]
 
     regime_kernel = vctorch.fast_prod_positive(
-        [scalar_kernel(regime_joint_names)] + regime_kernels("_factorized"),
-        dim=0)
+        vtorch.stack([scalar_kernel(regime_joint_names)]
+                     + regime_kernels("_factorized"),
+                     dim=-3),
+        dim=-3)
     architecture_kernel = vctorch.fast_prod_positive(
-        [scalar_kernel(architecture_joint_names)]
-        + architecture_kernels("_factorized"),
-        dim=0)
+        vtorch.stack([scalar_kernel(architecture_joint_names)]
+                     + architecture_kernels("_factorized"),
+                     dim=-3),
+        dim=-3)
     joint_kernel = vctorch.fast_prod_positive(
-        [scalar_kernel(regime_joint_names
-                       + architecture_joint_names)]
-        + regime_kernels("_joint")
-        + architecture_kernels("_joint"),
-        dim=0)
+        vtorch.stack([scalar_kernel(regime_joint_names
+                                    + architecture_joint_names)]
+                     + regime_kernels("_joint")
+                     + architecture_kernels("_joint"),
+                     dim=-3),
+        dim=-3)
 
     alpha_regime_vs_architecture = vp.symbol("alpha_regime_vs_architecture")
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     scale = vp.symbol("scale")
 
-    state.allocate(alpha_regime_vs_architecture, (),
+    state.allocate(alpha_regime_vs_architecture, (1,),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
-    state.allocate(alpha_factorized_vs_joint, (),
+    state.allocate(alpha_factorized_vs_joint, (1,),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(4.0, 1.0))
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(2.0, 0.15))
 
-    kernel = (scale
-              * vtorch.sum(
-                  vctorch.mul_along_dim(
-                      vctorch.heads_tails(alpha_factorized_vs_joint),
-                      vtorch.stack(
-                               [vtorch.sum(
-                                   vctorch.mul_along_dim(
-                                       vctorch.heads_tails(
-                                           alpha_regime_vs_architecture),
-                                       vtorch.stack([
-                                           regime_kernel,
-                                           architecture_kernel
-                                       ], dim=0),
-                                       dim=0),
-                                   dim=0),
-                                joint_kernel],
-                               dim=0),
-                      dim=0),
-                  dim=0))
+    kernel = vctorch.mul_along_dim(
+        scale,
+        vtorch.sum(
+            vctorch.mul_along_dim(
+                vctorch.heads_tails(alpha_factorized_vs_joint),
+                vtorch.stack(
+                    [vtorch.sum(
+                        vctorch.mul_along_dim(
+                            vctorch.heads_tails(
+                                alpha_regime_vs_architecture),
+                            vtorch.stack([
+                                regime_kernel,
+                                architecture_kernel
+                            ], dim=-3),
+                            dim=-3),
+                        dim=-3),
+                     joint_kernel], dim=-3),
+                dim=-3),
+            dim=-3),
+        dim=-3)
 
     state.allocate(lengthscale, (ialloc.count,),
                    gpytorch.constraints.GreaterThan(1e-4),
@@ -199,11 +215,9 @@ class VexprKernel(gpytorch.kernels.Kernel):
 
     def _initialize_from_inputs(self, x1, x2):
         if self.vectorize:
-            selection = (0,) * len(self._batch_shape)
-
-            inputs = {"x1": x1[selection],
-                      "x2": x2[selection],
-                      **{name: module.value[selection]
+            inputs = {"x1": x1,
+                      "x2": x2,
+                      **{name: module.value
                          for name, module in self.state.items()}}
             self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
 
@@ -214,12 +228,6 @@ class VexprKernel(gpytorch.kernels.Kernel):
 
         def kernel_f(x1, x2, parameters):
             return kernel_f2({"x1": x1, "x2": x2, **parameters})
-
-        for _ in self._batch_shape:
-            kernel_f = torch.vmap(kernel_f,
-                                  in_dims=(0, 0,
-                                           {name: 0
-                                            for name in self.state.keys()}))
 
         if self.torch_compile:
             kernel_f = torch.compile(kernel_f)
