@@ -26,6 +26,26 @@ linear_operator.settings.debug._set_state(False)
 botorch.settings.debug._set_state(False)
 
 
+try:
+    import nvtx
+except ImportError:
+    class NVTXAnnotateStub:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            pass
+
+        def __exit__(self, *args, **kwargs):
+            pass
+
+    # replace with stub
+    class NVTXStub:
+        annotate = NVTXAnnotateStub
+
+    nvtx = NVTXStub
+
+
 def initialize(sweep_name, model_name, vectorize, torch_compile):
     torch.set_default_dtype(torch.float64)
 
@@ -81,21 +101,22 @@ def scenario_fit(sweep_name, model_name, train_X, train_Y, model, mll,
             sort_by="cpu_time_total", row_limit=20))
         prof.export_chrome_trace(f"perf-fit-{sweep_name}-{model_name}.json")
     else:
-        # last_result = [None]
-        # def callback(parameters, result):
-        #     """
-        #     Note: botorch will wrap this callback in slow code, so it is
-        #     disabled by default.
-        #     """
-        #     last_result[0] = result
+        with nvtx.annotate("benchmark", color="blue"):
+            # last_result = [None]
+            # def callback(parameters, result):
+            #     """
+            #     Note: botorch will wrap this callback in slow code, so it is
+            #     disabled by default.
+            #     """
+            #     last_result[0] = result
 
-        tstart = time.time()
-        botorch.fit_gpytorch_mll(mll,
-                                 # optimizer_kwargs=dict(
-                                 #     callback=callback
-                                 # )
-                                 )
-        tend = time.time()
+            tstart = time.time()
+            botorch.fit_gpytorch_mll(mll,
+                                     # optimizer_kwargs=dict(
+                                     #     callback=callback
+                                     # )
+                                     )
+            tend = time.time()
         elapsed = tend - tstart
         print(f"Elapsed time: {elapsed:>2f}")
         # print(last_result[0])
@@ -204,26 +225,27 @@ def benchmark_covariance_fit(sweep_name, model_name, train_X, train_Y,
                              trace=False, repetitions=200):
     """
     """
-    model.train()
+    with nvtx.annotate("warmup", color="red"):
+        model.train()
 
-    transformed_train_X = model.transform_inputs(train_X)
+        transformed_train_X = model.transform_inputs(train_X)
 
-    def f():
+        def f():
+            with gpytorch.settings.lazily_evaluate_kernels(False):
+                cov = model.covar_module(transformed_train_X).to_dense()
+                loss = cov.sum()
+                loss.backward()
+
+        # warmup
         with gpytorch.settings.lazily_evaluate_kernels(False):
-            cov = model.covar_module(transformed_train_X).to_dense()
-            loss = cov.sum()
-            loss.backward()
-
-    # warmup
-    with gpytorch.settings.lazily_evaluate_kernels(False):
-        f()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
+            f()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     X_shape = transformed_train_X.shape
     print(f"benchmark_covariance_fit: covar {X_shape} {X_shape}")
     if trace:
-        group_by_shape = True
+        group_by_shape = False
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                      record_shapes=group_by_shape) as prof:
             with record_function("benchmark_covariance_fit"):
@@ -235,18 +257,16 @@ def benchmark_covariance_fit(sweep_name, model_name, train_X, train_Y,
         filename = f"benchmark_covariance_fit_{sweep_name}_{model_name}.json"
         prof.export_chrome_trace(filename)
         print("Saved", filename)
-
     else:
-        # torch.cuda.set_sync_debug_mode(2)
-        tstart = time.time()
-        for _ in range(repetitions):
-            f()
+        with nvtx.annotate("benchmark", color="blue"):
+            tstart = time.time()
+            for _ in range(repetitions):
+                f()
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
 
-        tend = time.time()
-        # torch.cuda.set_sync_debug_mode(0)
+            tend = time.time()
         print(f"Elapsed time: {tend - tstart:>2f}")
 
 
@@ -298,22 +318,22 @@ def benchmark_covariance_cross_validate(
         repetitions=200):
     """
     """
+    with nvtx.annotate("warmup", color="red"):
+        model.train()
 
-    model.train()
+        transformed_train_X = model.transform_inputs(train_X)
 
-    transformed_train_X = model.transform_inputs(train_X)
+        def f():
+            with gpytorch.settings.lazily_evaluate_kernels(False):
+                cov = model.covar_module(transformed_train_X).to_dense()
+                loss = cov.sum()
+                loss.backward()
 
-    def f():
+        # warmup
         with gpytorch.settings.lazily_evaluate_kernels(False):
-            cov = model.covar_module(transformed_train_X).to_dense()
-            loss = cov.sum()
-            loss.backward()
-
-    # warmup
-    with gpytorch.settings.lazily_evaluate_kernels(False):
-        f()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
+            f()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     X_shape = transformed_train_X.shape
     print(f"benchmark_covariance_cross_validate: covar {X_shape} {X_shape}")
@@ -322,7 +342,7 @@ def benchmark_covariance_cross_validate(
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                      # record_shapes=group_by_shape
                      ) as prof:
-            with record_function("benchmark_covariance_fit"):
+            with record_function("benchmark_covariance_cross_validate"):
                 for _ in range(repetitions):
                     f()
             if torch.cuda.is_available():
@@ -336,14 +356,15 @@ def benchmark_covariance_cross_validate(
 
     else:
         # torch.cuda.set_sync_debug_mode(2)
-        tstart = time.time()
-        for _ in range(repetitions):
-            f()
+        with nvtx.annotate("benchmark", color="blue"):
+            tstart = time.time()
+            for _ in range(repetitions):
+                f()
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
 
-        tend = time.time()
+            tend = time.time()
         # torch.cuda.set_sync_debug_mode(0)
         print(f"Elapsed time: {tend - tstart:>2f}")
 
@@ -354,31 +375,30 @@ def benchmark_gp_cross_validate(
         repetitions=200):
     """
     """
+    with nvtx.annotate("warmup", color="red"):
+        model.train()
 
-    model.train()
+        # grad_log = []
 
-    # grad_log = []
+        def f():
+            with gpytorch.settings.lazily_evaluate_kernels(False):
+                output = model(train_X)
+                loss = -mll(output, train_Y.squeeze(-1))
+                loss.sum().backward()
+                # grad_log.append([t.grad.cpu().clone() for t in list(model.parameters())])
 
-    def f():
+        # warmup
         with gpytorch.settings.lazily_evaluate_kernels(False):
-            output = model(train_X)
-            loss = -mll(output, train_Y.squeeze(-1))
-            loss.sum().backward()
-            # grad_log.append([t.grad.cpu().clone() for t in list(model.parameters())])
-
-    # warmup
-    with gpytorch.settings.lazily_evaluate_kernels(False):
-        f()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
+            f()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     X_shape = train_X.shape
     print(f"benchmark_gp_cross_validate: covar {X_shape} {X_shape}")
     if trace:
         group_by_shape = True
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                     # record_shapes=group_by_shape
-                     ) as prof:
+                     record_shapes=group_by_shape) as prof:
             with record_function("benchmark_gp_cross_validate"):
                 for _ in range(repetitions):
                     f()
@@ -393,14 +413,15 @@ def benchmark_gp_cross_validate(
 
     else:
         # torch.cuda.set_sync_debug_mode(2)
-        tstart = time.time()
-        for _ in range(repetitions):
-            f()
+        with nvtx.annotate("benchmark", color="blue"):
+            tstart = time.time()
+            for _ in range(repetitions):
+                f()
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
 
-        tend = time.time()
+            tend = time.time()
         # torch.cuda.set_sync_debug_mode(0)
         print(f"Elapsed time: {tend - tstart:>2f}")
 
@@ -412,24 +433,25 @@ def benchmark_gp_cross_validate(
 
 def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
                        search_space, search_xform, trace=False, repetitions=200):
-    X = train_X.clone()
-    Y = train_Y.clone()
+    with nvtx.annotate("warmup", color="red"):
+        X = train_X.clone()
+        Y = train_Y.clone()
 
-    # This tests n different sets of candidates in parallel
-    X = X.unsqueeze(1)
-    # X = X.repeat(12, 1).unsqueeze(1)
+        # This tests n different sets of candidates in parallel
+        X = X.unsqueeze(1)
+        # X = X.repeat(12, 1).unsqueeze(1)
 
-    X.requires_grad_(True)
-    model.eval()
+        X.requires_grad_(True)
+        model.eval()
 
-    # warmup
-    posterior = model.posterior(X)
-    loss = posterior.mean.sum()
-    loss.backward()
-    del posterior
-    del loss
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
+        # warmup
+        posterior = model.posterior(X)
+        loss = posterior.mean.sum()
+        loss.backward()
+        del posterior
+        del loss
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     print(f"benchmark_optimize: candidates size {X.shape}")
     if trace:
@@ -450,15 +472,16 @@ def benchmark_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
 
     else:
         # torch.cuda.set_sync_debug_mode(2)
-        tstart = time.time()
-        for _ in range(repetitions):
-            posterior = model.posterior(X)
-            loss = posterior.mean.sum()
-            loss.backward()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        with nvtx.annotate("benchmark", color="blue"):
+            tstart = time.time()
+            for _ in range(repetitions):
+                posterior = model.posterior(X)
+                loss = posterior.mean.sum()
+                loss.backward()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
 
-        tend = time.time()
+            tend = time.time()
         # torch.cuda.set_sync_debug_mode(0)
         print(f"Elapsed time: {tend - tstart:>2f}")
 
@@ -469,20 +492,21 @@ def scenario_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
     filename = f"performance_test_{sweep_name}_{model_name}.pt"
     retrain = force_retrain or not os.path.exists(filename)
     if retrain:
-        print("fitting")
-        botorch.fit_gpytorch_model(mll)
-        print("fitted")
-        torch.save(mll.state_dict(), filename)
+        with nvtx.annotate("fitting", color="red"):
+            print("fitting")
+            botorch.fit_gpytorch_model(mll)
+            print("fitted")
+            torch.save(mll.state_dict(), filename)
     else:
         mll.train()
         mll.load_state_dict(torch.load(filename))
-        # warmup
-        posterior = model.posterior(train_X.unsqueeze(1))
-        loss = posterior.mean.sum()
-        loss.backward()
-        del posterior
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        with nvtx.annotate("warmup", color="red"):
+            posterior = model.posterior(train_X.unsqueeze(1))
+            loss = posterior.mean.sum()
+            loss.backward()
+            del posterior
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
 
     rounding_function = ol.transforms.UntransformThenTransform(
         search_space, search_xform,
@@ -528,9 +552,10 @@ def scenario_optimize(sweep_name, model_name, train_X, train_Y, model, mll,
         prof.export_chrome_trace(filename)
         print("Saved", filename)
     else:
-        tstart = time.time()
-        candidates, acq_value = f()
-        tend = time.time()
+        with nvtx.annotate("benchmark", color="blue"):
+            tstart = time.time()
+            candidates, acq_value = f()
+            tend = time.time()
         print(f"Elapsed time: {tend - tstart:>2f}, acq_value: {acq_value}")
 
 
