@@ -10,15 +10,23 @@ import vexpr.torch as vtorch
 import vexpr.custom.torch as vctorch
 from jax.tree_util import tree_map
 
-from .gp_utils import State, IndexAllocator, FastStandardize
+from .gp_utils import (
+    StateBuilder,
+    IndexAllocator,
+    FastStandardize,
+    comparable_hashable,
+)
 
 
 
 N_HOT_PREFIX = "choice_nhot"
 
 
-def make_handson_kernel(space, batch_shape=()):
+def make_handson_kernel(space):
     """
+    Creates a kernel vexpr and an object that is ready to instantiate kernel
+    parameters, given batch shape.
+
     This kernel attempts to group parameters into orthogonal groups, while
     also always allowing for the model to learn to use the joint space.
 
@@ -33,7 +41,7 @@ def make_handson_kernel(space, batch_shape=()):
                                  1e-6,
                                  1 - 1e-6)
 
-    state = State(batch_shape)
+    state = StateBuilder()
 
     ialloc = IndexAllocator()
 
@@ -199,8 +207,16 @@ def make_handson_kernel(space, batch_shape=()):
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(3.0, 6.0))
 
-    return kernel, state.modules
+    return kernel, state
 
+
+# Lets long-running processes that instantiate multiple GPs avoid recompiling.
+# Sadly, compiling is still required once for every batch_shape, since
+# torch.vmap doesn't work with torch.compile, so each Vexpr needs to handle
+# batching internally thus is different for each batch_shape. This caching will
+# become much more powerful if we can switch to vmapping a torch.compiled
+# function that is batch-unaware.
+cached_compiled_fs = {}
 
 class VexprKernel(gpytorch.kernels.Kernel):
     def __init__(self, kernel_vexpr, state_modules, batch_shape, vectorize=True,
@@ -230,7 +246,12 @@ class VexprKernel(gpytorch.kernels.Kernel):
             return kernel_f2({"x1": x1, "x2": x2, **parameters})
 
         if self.torch_compile:
-            kernel_f = torch.compile(kernel_f)
+            comparable_vexpr = comparable_hashable(self.kernel_vexpr)
+            compiled_f = cached_compiled_fs.get(comparable_vexpr, None)
+            if compiled_f is None:
+                compiled_f = torch.compile(kernel_f)
+                cached_compiled_fs[comparable_vexpr] = compiled_f
+            kernel_f = compiled_f
 
         self.kernel_f = kernel_f
 
@@ -320,8 +341,11 @@ class VexprHandsOnGP(botorch.models.SingleTaskGP):
 
         xform = ol.transforms.Chain(search_space, *xforms)
 
+        kernel_vexpr, state_builder = make_handson_kernel(xform.space2)
+        state_modules = state_builder.instantiate(aug_batch_shape)
         covar_module = VexprKernel(
-            *make_handson_kernel(xform.space2, aug_batch_shape),
+            kernel_vexpr,
+            state_modules,
             batch_shape=aug_batch_shape,
             vectorize=vectorize,
             torch_compile=torch_compile,

@@ -3,6 +3,7 @@ import gpytorch
 import linear_operator
 import outerloop as ol
 import torch
+import vexpr as vp
 
 
 def configs_dirs_to_X_Y(configs, trial_dirs, metric, space, xform,
@@ -20,6 +21,22 @@ def configs_dirs_to_X_Y(configs, trial_dirs, metric, space, xform,
     Y = torch.tensor(kept_y, device=device)
 
     return X, Y
+
+
+def comparable_hashable(v):
+    if isinstance(v, vp.Primitive):
+        return v
+    if isinstance(v, torch.Tensor):
+        return comparable_hashable(v.tolist())
+    if isinstance(v, dict):
+        return tuple(sorted((k, comparable_hashable(x))
+                            for k, x in v.items()))
+    if isinstance(v, (tuple, list)):
+        # intentionally convert Vexprs to tuples, since we are mangling their
+        # kwargs to be tuples of pairs, rather than dicts, so they are no longer
+        # valid Vexprs
+        return tuple(comparable_hashable(v) for v in v)
+    return v
 
 
 class ValueModule(gpytorch.Module):
@@ -71,16 +88,21 @@ class ValueModule(gpytorch.Module):
                     return self.raw_value_constraint.transform(self.raw_value)
 
 
-class State:
-    def __init__(self, batch_shape):
-        self.batch_shape = batch_shape
+class StateBuilder:
+    def __init__(self):
+        self.args_by_module_name = {}
         self.modules = {}
 
     def allocate(self, symbol, shape, constraint=None, prior=None, initialize=None):
-        shape = self.batch_shape + shape
         name = symbol.args[0]
-        assert name not in self.modules
-        self.modules[name] = ValueModule(shape, constraint, prior, initialize)
+        assert name not in self.args_by_module_name
+        self.args_by_module_name[name] = shape, constraint, prior, initialize
+
+    def instantiate(self, batch_shape):
+        return {name: ValueModule(batch_shape + shape, constraint, prior,
+                                  initialize)
+                for name, (shape, constraint, prior, initialize)
+                in self.args_by_module_name.items()}
 
 
 class IndexAllocator:
@@ -178,5 +200,3 @@ class FastStandardize(botorch.models.transforms.Standardize):
         kwargs = {"interleaved": mvn._interleaved} if posterior._is_mt else {}
         mvn_tf = mvn.__class__(mean=mean_tf, covariance_matrix=covar_tf, **kwargs)
         return botorch.posteriors.GPyTorchPosterior(mvn_tf)
-
-
