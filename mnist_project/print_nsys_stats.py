@@ -103,23 +103,25 @@ def main(db_path):
 
      # We assume the first few launch kernel events didn't block.
      launch_kernel_active_time = durations(cuda_launch_kernel_events[10:40]).mean()
-     total_lk_active_time = (launch_kernel_active_time
-                             * len(cuda_launch_kernel_events))
+     total_lk_active_time = int(launch_kernel_active_time
+                                * len(cuda_launch_kernel_events))
      estimated_launch_kernel_wait_time = max(
          0,
          durations(cuda_launch_kernel_events).sum() - total_lk_active_time)
 
-     estimated_cpu_time = end_time - start_time
+     benchmark_duration = end_time - start_time
      estimated_cpu_wait_time = (durations(cuda_device_synchronize_events).sum()
                                 + estimated_launch_kernel_wait_time)
-     cpu_wait_pct = 100. * (1 - (estimated_cpu_wait_time
-                                 / estimated_cpu_time))
-     print(f'Estimated CPU usage: {cpu_wait_pct:>.2f}%')
+     cpu_wait_pct = 100. * (1 - (estimated_cpu_wait_time / benchmark_duration))
 
      estimated_gpu_active_time = np.sum([durations(events).sum()
                                          for events in list(device_events.values())])
-     gpu_wait_pct = 100. * (estimated_gpu_active_time
-                            / (end_time - start_time))
+     gpu_wait_pct = 100. * estimated_gpu_active_time / benchmark_duration
+
+     print(f'Duration: {benchmark_duration}')
+     print(f'Estimated CPU wait time: {estimated_cpu_wait_time}')
+     print(f'Estimated GPU active time: {estimated_gpu_active_time}')
+     print(f'Estimated CPU usage: {cpu_wait_pct:>.2f}%')
      print(f'Estimated GPU usage: {gpu_wait_pct:>.2f}%')
 
 

@@ -46,7 +46,7 @@ except ImportError:
     nvtx = NVTXStub
 
 
-def initialize(sweep_name, model_name, vectorize, torch_compile):
+def initialize(sweep_name, model_name, vectorize, torch_compile, num_models=1):
     torch.set_default_dtype(torch.float64)
 
     config = CONFIGS[sweep_name]
@@ -76,10 +76,17 @@ def initialize(sweep_name, model_name, vectorize, torch_compile):
                                search_xform,
                                device=device)
 
+    if num_models > 1:
+        X = X.expand(num_models, *X.shape)
+        Y = Y.expand(num_models, *Y.shape)
+
     model = model_cls(X, Y).to(device)
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(model.likelihood, model)
 
-    print(f"{sweep_name} {model_name} vectorize={vectorize} torch.compile={torch_compile}")
+    s = f"{sweep_name} {model_name} vectorize={vectorize} torch.compile={torch_compile}"
+    if num_models > 1:
+        s += f" num_models={num_models}"
+    print(s)
 
     return X, Y, model, mll, search_space, search_xform
 
@@ -570,6 +577,7 @@ def main():
     parser.add_argument("--trace", action="store_true")
     parser.add_argument("--repetitions", type=int, default=200)
     parser.add_argument("--force-retrain", action="store_true")
+    parser.add_argument("--num-models", type=int, default=1)
 
     parser.add_argument("--test", type=str, default="benchmark_fit", choices=[
         "benchmark_fit", "benchmark_optimize", "benchmark_covariance_optimize",
@@ -586,26 +594,30 @@ def main():
         benchmark_fit(args.sweep_name, args.model_name,
                       *initialize(args.sweep_name, args.model_name,
                                   vectorize=args.vectorize,
-                                  torch_compile=args.compile),
+                                  torch_compile=args.compile,
+                                  num_models=args.num_models),
                       trace=args.trace, repetitions=args.repetitions)
     elif args.test == "benchmark_optimize":
         benchmark_optimize(args.sweep_name, args.model_name,
                            *initialize(args.sweep_name, args.model_name,
                                        vectorize=args.vectorize,
-                                       torch_compile=args.compile),
+                                       torch_compile=args.compile,
+                                       num_models=args.num_models),
                            trace=args.trace, repetitions=args.repetitions)
 
     elif args.test == "benchmark_covariance_optimize":
         benchmark_covariance_optimize(args.sweep_name, args.model_name,
                                       *initialize(args.sweep_name, args.model_name,
                                                   vectorize=args.vectorize,
-                                                  torch_compile=args.compile),
+                                                  torch_compile=args.compile,
+                                                  num_models=args.num_models),
                                       trace=args.trace, repetitions=args.repetitions)
     elif args.test == "benchmark_covariance_fit":
         benchmark_covariance_fit(args.sweep_name, args.model_name,
                                  *initialize(args.sweep_name, args.model_name,
                                              vectorize=args.vectorize,
-                                             torch_compile=args.compile),
+                                             torch_compile=args.compile,
+                                             num_models=args.num_models),
                                  trace=args.trace, repetitions=args.repetitions)
     elif args.test == "benchmark_covariance_cross_validate":
         benchmark_covariance_cross_validate(
@@ -625,13 +637,15 @@ def main():
         scenario_fit(args.sweep_name, args.model_name,
                      *initialize(args.sweep_name, args.model_name,
                                  vectorize=args.vectorize,
-                                 torch_compile=args.compile),
+                                 torch_compile=args.compile,
+                                 num_models=args.num_models),
                      trace=args.trace)
     elif args.test == "scenario_optimize":
         scenario_optimize(args.sweep_name, args.model_name,
                           *initialize(args.sweep_name, args.model_name,
                                       vectorize=args.vectorize,
-                                      torch_compile=args.compile),
+                                      torch_compile=args.compile,
+                                      num_models=args.num_models),
                           trace=args.trace, force_retrain=args.force_retrain)
 
 

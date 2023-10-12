@@ -18,6 +18,18 @@ python run_cross_validation.py --sweep-name mnist1 --model-name VexprHandsOnLoss
 
 - Plot the GP results in [plot.ipynb](plot.ipynb)
 
+- Run CUDA performance tests
+
+```
+./benchmark_fit_save_data.sh
+python benchmark_fit_plot.py
+```
+
+Result:
+
+![fit benchmark](images/benchmark_fit.svg)
+
+
 <!--
 
 

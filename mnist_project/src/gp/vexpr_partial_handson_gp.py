@@ -209,7 +209,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
                       **{name: module.value
                          for name, module in self.state.items()}}
             self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
-            print(self.kernel_vexpr)
+            # print(self.kernel_vexpr)
 
         if self.torch_compile:
             kernel_f2 = vp.to_python(self.kernel_vexpr)
