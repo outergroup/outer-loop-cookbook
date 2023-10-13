@@ -74,14 +74,15 @@ def make_botorch_range_choice_kernel(space):
     state.allocate(alpha_range_vs_nhot, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
-    sum_kernel = vtorch.sum(vctorch.heads_tails(alpha_range_vs_nhot)
-                            * vtorch.stack([range_kernel(), nhot_kernel()],
-                                           dim=-1),
-                            dim=-1)
+    sum_kernel = vtorch.sum(
+        vctorch.mul_along_dim(
+            vctorch.heads_tails(alpha_range_vs_nhot),
+            vtorch.stack([range_kernel(), nhot_kernel()]),
+            dim=0),
+        dim=0)
     prod_kernel = vctorch.fast_prod_positive(
-        vtorch.stack([range_kernel(), nhot_kernel()],
-                     dim=-1),
-        dim=-1)
+        [range_kernel(), nhot_kernel()],
+        dim=0)
 
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     state.allocate(alpha_factorized_vs_joint, (),
@@ -91,10 +92,15 @@ def make_botorch_range_choice_kernel(space):
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(2.0, 0.15))
-    kernel = scale * vtorch.sum(vctorch.heads_tails(alpha_factorized_vs_joint)
-                                * vtorch.stack([sum_kernel, prod_kernel],
-                                               dim=-1),
-                                dim=-1)
+    kernel = vctorch.mul_along_dim(
+        scale,
+        vtorch.sum(
+            vctorch.mul_along_dim(
+                vctorch.heads_tails(alpha_factorized_vs_joint),
+                vtorch.stack([sum_kernel, prod_kernel]),
+                dim=0),
+            dim=0),
+        dim=0)
 
     state.allocate(lengthscale, (ialloc.count,),
                    gpytorch.constraints.GreaterThan(1e-4),
