@@ -8,7 +8,7 @@ import torch
 import vexpr as vp
 import vexpr.torch as vtorch
 import vexpr.custom.torch as vctorch
-from jax.tree_util import tree_map
+from torch.utils._pytree import tree_map
 
 from .gp_utils import StateBuilder, IndexAllocator, FastStandardize
 

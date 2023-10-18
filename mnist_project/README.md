@@ -27,7 +27,7 @@ python benchmark_fit_plot.py
 
 Result:
 
-![fit benchmark](images/benchmark_fit.svg)
+![fit benchmark](images/benchmark_fit_VexprHandsOnGP.svg)
 
 
 <!--

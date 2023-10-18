@@ -23,29 +23,19 @@ def fetch_events_during_benchmark(db_path):
         print("No 'benchmark' range found.")
         return
 
-    # Fetch textId for "cudaLaunchKernel"
-    cursor.execute("SELECT rowid FROM StringIds WHERE value LIKE '%cudaLaunchKernel%'")
-    cuda_launch_kernel_text_id = cursor.fetchone()
-    if cuda_launch_kernel_text_id is None:
-        print("No 'cudaLaunchKernel' events found.")
-        return
-    cuda_launch_kernel_text_id = cuda_launch_kernel_text_id[0]
+    runtime_events = {}
+    for name in ["cudaLaunchKernel", "cudaMemcpyAsync", "cudaDeviceSynchronize", "cuLaunchKernel"]:
+        # Fetch textId for name
+        cursor.execute(f"SELECT rowid FROM StringIds WHERE value LIKE '%{name}%'")
+        text_id = cursor.fetchone()
+        if text_id is None:
+            print(f"No '{name}' events found.")
+            continue
+        text_id = text_id[0]
 
-    # Fetch textId for "cudaDeviceSynchronize"
-    cursor.execute("SELECT rowid FROM StringIds WHERE value LIKE '%cudaDeviceSynchronize%'")
-    cuda_device_synchronize_text_id = cursor.fetchone()
-    if cuda_device_synchronize_text_id is None:
-        print("No 'cudaDeviceSynchronize' events found.")
-        return
-    cuda_device_synchronize_text_id = cuda_device_synchronize_text_id[0]
-
-    # Fetch all cudaLaunchKernel events within the "benchmark" time range
-    cursor.execute(f"SELECT start, end FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE nameId = {cuda_launch_kernel_text_id} AND start >= {start_time} AND end <= {end_time}")
-    cuda_launch_kernel_events = cursor.fetchall()
-
-    # Fetch all cudaDeviceSynchronize events within the "benchmark" time range
-    cursor.execute(f"SELECT start, end FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE nameId = {cuda_device_synchronize_text_id} AND start >= {start_time} AND end <= {end_time}")
-    cuda_device_synchronize_events = cursor.fetchall()
+        # Fetch all events within the "benchmark" time range
+        cursor.execute(f"SELECT start, end FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE nameId = {text_id} AND start >= {start_time} AND end <= {end_time}")
+        runtime_events[name] = cursor.fetchall()
 
     all_events = defaultdict(list)
     unique_names = defaultdict(set)
@@ -85,7 +75,7 @@ def fetch_events_during_benchmark(db_path):
     # Close the database connection
     conn.close()
 
-    return start_time, end_time, cuda_launch_kernel_events, cuda_device_synchronize_events, all_events, all_unique_names
+    return start_time, end_time, runtime_events, all_events, all_unique_names
 
 
 def durations(events):
@@ -96,22 +86,30 @@ def durations(events):
 def main(db_path):
      (start_time,
       end_time,
-      cuda_launch_kernel_events,
-      cuda_device_synchronize_events,
+      runtime_events,
       device_events,
       unique_names) = fetch_events_during_benchmark(db_path)
 
-     # We assume the first few launch kernel events didn't block.
-     launch_kernel_active_time = durations(cuda_launch_kernel_events[10:40]).mean()
-     total_lk_active_time = int(launch_kernel_active_time
-                                * len(cuda_launch_kernel_events))
-     estimated_launch_kernel_wait_time = max(
-         0,
-         durations(cuda_launch_kernel_events).sum() - total_lk_active_time)
+     estimated_cpu_wait_time = 0
+     for name in ["cudaLaunchKernel", "cudaMemcpyAsync", "cudaDeviceSynchronize", "cuLaunchKernel"]:
+         events = runtime_events.get(name, [])
+         if len(events) < 5:
+             continue
+
+         # We assume the first few events didn't block.
+         event_active_time = durations(events[1:4]).mean()
+         total_event_active_time = int(event_active_time * len(events))
+         estimated_cpu_wait_time += max(
+             0,
+             durations(events).sum() - total_event_active_time)
+
+     for name in ["cudaDeviceSynchronize"]:
+         events = runtime_events.get(name, [])
+         if len(events) == 0:
+             continue
+         estimated_cpu_wait_time += durations(events).sum()
 
      benchmark_duration = end_time - start_time
-     estimated_cpu_wait_time = (durations(cuda_device_synchronize_events).sum()
-                                + estimated_launch_kernel_wait_time)
      cpu_wait_pct = 100. * (1 - (estimated_cpu_wait_time / benchmark_duration))
 
      estimated_gpu_active_time = np.sum([durations(events).sum()
