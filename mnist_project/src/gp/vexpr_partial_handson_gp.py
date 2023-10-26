@@ -14,7 +14,6 @@ from .gp_utils import (
     StateBuilder,
     IndexAllocator,
     FastStandardize,
-    comparable_hashable,
 )
 
 
@@ -236,7 +235,7 @@ class VexprKernel(gpytorch.kernels.Kernel):
             return kernel_f2({"x1": x1, "x2": x2, **parameters})
 
         if self.torch_compile:
-            comparable_vexpr = comparable_hashable(self.kernel_vexpr)
+            comparable_vexpr = vp.comparable_hashable(self.kernel_vexpr)
             compiled_f = cached_compiled_fs.get(comparable_vexpr, None)
             if compiled_f is None:
                 compiled_f = torch.compile(kernel_f)

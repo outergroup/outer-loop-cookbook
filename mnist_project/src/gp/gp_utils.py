@@ -3,7 +3,6 @@ import gpytorch
 import linear_operator
 import outerloop as ol
 import torch
-import vexpr as vp
 
 
 def configs_dirs_to_X_Y(configs, trial_dirs, metric, space, xform,
@@ -21,22 +20,6 @@ def configs_dirs_to_X_Y(configs, trial_dirs, metric, space, xform,
     Y = torch.tensor(kept_y, device=device)
 
     return X, Y
-
-
-def comparable_hashable(v):
-    if isinstance(v, vp.Primitive):
-        return v
-    if isinstance(v, torch.Tensor):
-        return comparable_hashable(v.tolist())
-    if isinstance(v, dict):
-        return tuple(sorted((k, comparable_hashable(x))
-                            for k, x in v.items()))
-    if isinstance(v, (tuple, list)):
-        # intentionally convert Vexprs to tuples, since we are mangling their
-        # kwargs to be tuples of pairs, rather than dicts, so they are no longer
-        # valid Vexprs
-        return tuple(comparable_hashable(v) for v in v)
-    return v
 
 
 class ValueModule(gpytorch.Module):
