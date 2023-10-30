@@ -53,10 +53,9 @@ def to_visual(expr):
             assert (not isinstance(t.args[0], vp.Vexpr)
                     and isinstance(t.args[0], (list, tuple)))
             # zip w with the stack
-            expr = expr.update_args(
-                tuple(w[i] * sum_operand
-                      for i, sum_operand in enumerate(t.args[0]))
-            )
+            new_arg0 = [w[i] * sum_operand
+                        for i, sum_operand in enumerate(t.args[0])]
+            expr = expr.update_args((new_arg0,))
 
     if expr.op == vctorch.primitives.mul_along_dim_p:
         # Detect any mul_along_dim that isn't used for a weighted sum.
@@ -70,10 +69,9 @@ def to_visual(expr):
         assert ls.op == vtorch.primitives.index_select_p
         symbol = ls.args[0]
         indices = ls.args[2]
-        expr = expr.update_args(
-            tuple(select(name) / symbol[index]
-                  for name, index in zip(names, indices))
-        )
+        new_arg0 = [select(name) / symbol[index]
+                    for name, index in zip(names, indices)]
+        expr = expr.update_args((new_arg0,))
 
     if expr.op in (vtorch.primitives.sum_p, vtorch.primitives.prod_p):
         if expr.kwargs.get("dim", None) == -3:
@@ -266,7 +264,7 @@ def make_handson_kernel(space):
                                     kernel)
     kernel_visualizable = vp.bottom_up_transform(to_visual, kernel)
 
-    return kernel_runnable, state
+    return kernel_runnable, kernel_visualizable, state
 
 
 # Lets long-running processes that instantiate multiple GPs avoid recompiling.
@@ -278,10 +276,12 @@ def make_handson_kernel(space):
 cached_compiled_fs = {}
 
 class VexprKernel(gpytorch.kernels.Kernel):
-    def __init__(self, kernel_vexpr, state_modules, batch_shape, vectorize=True,
-                 torch_compile=False, initialize="mean"):
+    def __init__(self, kernel_vexpr, kernel_viz_vexpr, state_modules,
+                 batch_shape, vectorize=True, torch_compile=False,
+                 initialize="mean"):
         super().__init__(batch_shape=batch_shape)
         self.kernel_vexpr = kernel_vexpr
+        self.kernel_viz_vexpr = kernel_viz_vexpr
         self.state = torch.nn.ModuleDict(state_modules)
         self.kernel_f = None
         self.canary = torch.tensor(0.)
@@ -324,9 +324,18 @@ class VexprKernel(gpytorch.kernels.Kernel):
             self.kernel_vexpr)
         return self
 
+    def _visualize(self):
+        with torch.no_grad():
+            parameters = {name: module.value
+                          for name, module in self.state.items()}
+            viz_expr = vp.partial_eval(self.kernel_viz_vexpr, parameters)
+            print(viz_expr)
+
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
         assert not diag
         assert not last_dim_is_batch
+
+        self._visualize()
 
         parameters = {name: module.value
                       for name, module in self.state.items()}
@@ -404,10 +413,13 @@ class VexprHandsOnVisualizedGP(botorch.models.SingleTaskGP):
 
         xform = ol.transforms.Chain(search_space, *xforms)
 
-        kernel_vexpr, state_builder = make_handson_kernel(xform.space2)
+        (kernel_vexpr,
+         kernel_vexpr_viz,
+         state_builder) = make_handson_kernel(xform.space2)
         state_modules = state_builder.instantiate(aug_batch_shape)
         covar_module = VexprKernel(
             kernel_vexpr,
+            kernel_vexpr_viz,
             state_modules,
             batch_shape=aug_batch_shape,
             vectorize=vectorize,
