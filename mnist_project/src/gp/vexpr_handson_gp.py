@@ -81,7 +81,7 @@ def make_handson_kernel(space):
         alpha_factorized_or_joint = vp.symbol("alpha_factorized_or_joint"
                                               + suffix)
         state.allocate(w_additive, (len(names),),
-                       zero_one_exclusive(),
+                       ol.constraints.SoftmaxConstraint(),
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
         state.allocate(alpha_factorized_or_joint, (1,),
                        zero_one_exclusive(),
