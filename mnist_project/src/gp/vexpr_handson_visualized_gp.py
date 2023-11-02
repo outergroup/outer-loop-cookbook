@@ -6,9 +6,9 @@ import outerloop as ol
 import outerloop.vexpr.torch as ovt
 import torch
 import vexpr as vp
+import vexpr.core
 import vexpr.torch as vtorch
 import vexpr.custom.torch as vctorch
-from torch.utils._pytree import tree_map
 from vexpr.core import _p_and_constructor
 
 from .gp_utils import (
@@ -21,7 +21,30 @@ from .gp_utils import (
 # Vexpr primitives that never get run. Some get translated into runnable
 # primitives, others are intended for visualization.
 select_divide_p, select_divide = _p_and_constructor("select_divide")
-select_p, select = _p_and_constructor("select")
+sum_p, sum_ = _p_and_constructor("sum")
+prod_p, prod_ = _p_and_constructor("prod")
+exp_p, exp = _p_and_constructor("exp")
+compare_p, compare = _p_and_constructor("compare")
+matern25_p, matern25 = _p_and_constructor("matern25")
+l1norm_p, l1norm = _p_and_constructor("l1norm")
+l2norm_p, l2norm = _p_and_constructor("l2norm")
+
+annotate_weight_p, annotate_weight = _p_and_constructor("annotate_weight")
+annotate_lengthscale_p, annotate_lengthscale = _p_and_constructor("annotate_lengthscale")
+annotate_scale_p, annotate_scale = _p_and_constructor("annotate_scale")
+
+
+def new_repr(old_repr, expr):
+    if isinstance(expr, vexpr.core.VexprWithMetadata):
+        prefix = "\n# " + expr.metadata["comment"] + "\n"
+        return prefix + old_repr(expr)
+    else:
+        return old_repr(expr)
+
+vexpr.core.repr_impls.update({
+    op: partial(new_repr, old)
+    for op, old in vexpr.core.repr_impls.items()
+})
 
 
 def to_runnable(index_for_name, expr):
@@ -52,16 +75,23 @@ def to_visual(expr):
             assert t.op == vtorch.primitives.stack_p
             assert (not isinstance(t.args[0], vp.Vexpr)
                     and isinstance(t.args[0], (list, tuple)))
-            # zip w with the stack
-            new_arg0 = [w[i] * sum_operand
-                        for i, sum_operand in enumerate(t.args[0])]
+            # zip w with the stack, moving comments up to above the
+            # multiplication
+            new_arg0 = [
+                sum_operand.new(vp.primitives.operator_mul_p,
+                                (annotate_weight(w[i]),
+                                 vp.Vexpr(sum_operand.op,
+                                          sum_operand.args,
+                                          sum_operand.kwargs)),
+                                {})
+                for i, sum_operand in enumerate(t.args[0])]
             expr = expr.update_args((new_arg0,))
 
     if expr.op == vctorch.primitives.mul_along_dim_p:
         # Detect any mul_along_dim that isn't used for a weighted sum.
         w, t = expr.args
         if t.op != vtorch.primitives.stack_p:
-            expr = w * t
+            expr = annotate_scale(w) * t
 
     if expr.op == vtorch.primitives.cdist_p:
         assert expr.args[0].op == select_divide_p
@@ -69,18 +99,35 @@ def to_visual(expr):
         assert ls.op == vtorch.primitives.index_select_p
         symbol = ls.args[0]
         indices = ls.args[2]
-        new_arg0 = [select(name) / symbol[index]
+        new_arg0 = [compare(name) / annotate_lengthscale(symbol[index])
                     for name, index in zip(names, indices)]
-        expr = expr.update_args((new_arg0,))
+        p = expr.kwargs.get("p", 2)
+        if p == 1:
+            expr = l1norm(new_arg0)
+        elif p == 2:
+            expr = l2norm(new_arg0)
+        else:
+            raise ValueError(p)
+
+    if expr.op == ovt.primitives.matern_p:
+        assert expr.kwargs.get("mu", 2.5) == 2.5
+        expr = matern25(*expr.args)
+
+    if expr.op == vtorch.primitives.exp_p:
+        expr = exp(*expr.args)
 
     if expr.op in (vtorch.primitives.sum_p, vtorch.primitives.prod_p):
         if expr.kwargs.get("dim", None) == -3:
             # Convert to dim=0 and remove any child stack.
             if isinstance(expr.args[0], vp.Vexpr) \
                and expr.args[0].op == vtorch.primitives.stack_p:
-                expr = vp.Vexpr(expr.op, expr.args[0].args, dict(dim=0))
+                expr = expr.new(expr.op, expr.args[0].args, dict(dim=0))
             else:
-                expr = vp.Vexpr(expr.op, expr.args, dict(dim=0))
+                expr = expr.new(expr.op, expr.args, dict(dim=0))
+
+        if expr.kwargs.get("dim", None) == 0:
+            op = sum_p if expr.op == vtorch.primitives.sum_p else prod_p
+            expr = expr.new(op, expr.args, {})
 
     return expr
 
@@ -139,7 +186,7 @@ def make_handson_kernel(space):
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
         state.allocate(alpha_factorized_or_joint, (1,),
                        zero_one_exclusive(),
-                       ol.priors.BetaPrior(4.0, 1.0))
+                       ol.priors.BetaPrior(5.0, 2.0))
 
         return vtorch.sum(
             vctorch.mul_along_dim(
@@ -203,34 +250,56 @@ def make_handson_kernel(space):
 
     architecture_joint_names = ["log_gmean_channels_and_units"]
 
-    regime_kernel = vtorch.prod(
-        vtorch.stack([scalar_kernel(regime_joint_names)]
-                     + regime_kernels("_factorized"),
-                     dim=-3),
-        dim=-3)
-    architecture_kernel = vtorch.prod(
-        vtorch.stack([scalar_kernel(architecture_joint_names)]
-                     + architecture_kernels("_factorized"),
-                     dim=-3),
-        dim=-3)
-    joint_kernel = vtorch.prod(
-        vtorch.stack([scalar_kernel(regime_joint_names
-                                    + architecture_joint_names)]
-                     + regime_kernels("_joint")
-                     + architecture_kernels("_joint"),
-                     dim=-3),
-        dim=-3)
+    regime_kernel = vp.with_metadata(
+        vtorch.prod(
+            vtorch.stack([scalar_kernel(regime_joint_names)]
+                         + regime_kernels("_factorized"),
+                         dim=-3),
+            dim=-3),
+        dict(comment="Regime kernel"))
+    architecture_kernel = vp.with_metadata(
+        vtorch.prod(
+            vtorch.stack([scalar_kernel(architecture_joint_names)]
+                         + architecture_kernels("_factorized"),
+                         dim=-3),
+            dim=-3),
+        dict(comment="Architecture kernel")
+    )
+    joint_kernel = vp.with_metadata(
+        vtorch.prod(
+            vtorch.stack([scalar_kernel(regime_joint_names
+                                        + architecture_joint_names)]
+                         + regime_kernels("_joint")
+                         + architecture_kernels("_joint"),
+                         dim=-3),
+            dim=-3),
+        dict(comment="Joint regime and architecture kernel")
+    )
 
     alpha_regime_vs_architecture = vp.symbol("alpha_regime_vs_architecture")
-    alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
-    scale = vp.symbol("scale")
-
     state.allocate(alpha_regime_vs_architecture, (1,),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
+    factorized_kernel = vp.with_metadata(
+        vtorch.sum(
+            vctorch.mul_along_dim(
+                vctorch.heads_tails(
+                    alpha_regime_vs_architecture),
+                vtorch.stack([
+                    regime_kernel,
+                    architecture_kernel
+                ], dim=-3),
+                dim=-3),
+            dim=-3),
+        dict(comment="Factorized regime and architecture kernels")
+    )
+
+    alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
+    scale = vp.symbol("scale")
+
     state.allocate(alpha_factorized_vs_joint, (1,),
                    zero_one_exclusive(),
-                   ol.priors.BetaPrior(4.0, 1.0))
+                   ol.priors.BetaPrior(5.0, 2.0))
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(2.0, 0.15))
@@ -240,18 +309,10 @@ def make_handson_kernel(space):
         vtorch.sum(
             vctorch.mul_along_dim(
                 vctorch.heads_tails(alpha_factorized_vs_joint),
-                vtorch.stack(
-                    [vtorch.sum(
-                        vctorch.mul_along_dim(
-                            vctorch.heads_tails(
-                                alpha_regime_vs_architecture),
-                            vtorch.stack([
-                                regime_kernel,
-                                architecture_kernel
-                            ], dim=-3),
-                            dim=-3),
-                        dim=-3),
-                     joint_kernel], dim=-3),
+                vtorch.stack([
+                    factorized_kernel,
+                    joint_kernel
+                ], dim=-3),
                 dim=-3),
             dim=-3),
         dim=-3)
@@ -317,26 +378,16 @@ class VexprKernel(gpytorch.kernels.Kernel):
     def _apply(self, fn):
         self = super()._apply(fn)
         self.canary = fn(self.canary)
-        self.kernel_vexpr = tree_map(
+        self.kernel_vexpr = vp.transform_leafs(
             lambda v: (fn(v)
                        if isinstance(v, torch.Tensor)
                        else v),
             self.kernel_vexpr)
         return self
 
-    def _visualize(self):
-        with torch.no_grad():
-            parameters = {name: module.value
-                          for name, module in self.state.items()}
-            viz_expr = vp.partial_eval(self.kernel_viz_vexpr, parameters)
-            print(viz_expr)
-
     def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
         assert not diag
         assert not last_dim_is_batch
-
-        self._visualize()
-
         parameters = {name: module.value
                       for name, module in self.state.items()}
 
@@ -453,8 +504,11 @@ class VexprHandsOnVisualizedGP(botorch.models.SingleTaskGP):
             noise_constraint=gpytorch.constraints.GreaterThan(
                 min_noise, transform=None, initial_value=1e-3
             ),
-            noise_prior=gpytorch.priors.GammaPrior(0.9, 10.0),
+            # noise_prior=gpytorch.priors.GammaPrior(0.9, 10.0),
+            noise_prior=gpytorch.priors.GammaPrior(1.1, 0.05),
         )
+
+        self.viz_header_printed = False
 
         super().__init__(
             train_X, train_Y,
@@ -463,3 +517,64 @@ class VexprHandsOnVisualizedGP(botorch.models.SingleTaskGP):
             likelihood=likelihood,
             **extra_kwargs
         )
+
+
+    def _visualize(self):
+        with torch.no_grad():
+            parameters = {name: module.value
+                          for name, module in self.covar_module.state.items()}
+            viz_expr = vp.partial_eval(self.covar_module.kernel_viz_vexpr, parameters)
+
+        filename = "handson-fit.txt"
+
+        if not self.viz_header_printed:
+            names = [
+                "mean",
+                "noise",
+            ]
+
+            def f_firstcall(expr):
+                if expr.op == annotate_weight_p:
+                    name = f"$W{len(names)}"
+                    names.append(name)
+                    return vp.symbol(name)
+                elif expr.op == annotate_scale_p:
+                    name = f"$S{len(names)}"
+                    names.append(name)
+                    return vp.symbol(name)
+                elif expr.op == annotate_lengthscale_p:
+                    name = f"$LS{len(names)}"
+                    names.append(name)
+                    return vp.symbol(name)
+                else:
+                    return expr
+
+            first_call_expr = vp.bottom_up_transform(f_firstcall, viz_expr)
+
+            print(f"Logging to {filename}")
+            with open(filename, "w") as f:
+                print(first_call_expr, file=f)
+                print("<<<<", file=f)
+                print(",".join(names), file=f)
+            self.viz_header_printed = True
+
+        values = [
+            str(self.mean_module.constant.detach().item()),
+            str(self.likelihood.noise.detach().item()),
+        ]
+
+        def f_subsequent(expr):
+            if expr.op in (annotate_weight_p, annotate_scale_p,
+                           annotate_lengthscale_p):
+                values.append(str(expr.args[0].item()))
+            else:
+                return expr
+
+        vp.bottom_up_transform(f_subsequent, viz_expr)
+
+        with open(filename, "a") as f:
+            print(",".join(values), file=f)
+
+    def forward(self, x):
+        self._visualize()
+        return super().forward(x)
