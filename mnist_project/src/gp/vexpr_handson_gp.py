@@ -85,7 +85,7 @@ def make_handson_kernel(space):
                        ol.priors.DirichletPrior(torch.full((len(names),), 2.0)))
         state.allocate(alpha_factorized_or_joint, (1,),
                        zero_one_exclusive(),
-                       ol.priors.BetaPrior(4.0, 1.0))
+                       ol.priors.BetaPrior(5.0, 2.0))
 
         return vtorch.sum(
             vctorch.mul_along_dim(
@@ -176,7 +176,7 @@ def make_handson_kernel(space):
                    ol.priors.BetaPrior(2.0, 2.0))
     state.allocate(alpha_factorized_vs_joint, (1,),
                    zero_one_exclusive(),
-                   ol.priors.BetaPrior(4.0, 1.0))
+                   ol.priors.BetaPrior(5.0, 2.0))
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(2.0, 0.15))
@@ -377,7 +377,7 @@ class VexprHandsOnGP(botorch.models.SingleTaskGP):
             noise_constraint=gpytorch.constraints.GreaterThan(
                 min_noise, transform=None, initial_value=1e-3
             ),
-            noise_prior=gpytorch.priors.GammaPrior(0.9, 10.0),
+            noise_prior=gpytorch.priors.GammaPrior(1.1, 0.05),
         )
 
         super().__init__(
