@@ -6,10 +6,22 @@ import outerloop as ol
 import outerloop.vexpr.torch as ovt
 import torch
 import vexpr as vp
+import vexpr.core
 import vexpr.torch as vtorch
 import vexpr.custom.torch as vctorch
 
-from .gp_utils import StateBuilder, IndexAllocator, FastStandardize, VexprKernel
+from .gp_utils import (
+    StateBuilder,
+    IndexAllocator,
+    FastStandardize,
+    VexprKernel,
+    select_divide,
+    to_runnable,
+    to_visual,
+    register_comment_printing,
+    print_model_structure,
+    print_model_state,
+)
 
 
 N_HOT_PREFIX = "choice_nhot"
@@ -38,59 +50,54 @@ def make_botorch_range_choice_kernel(space):
     x1 = vp.symbol("x1")
     x2 = vp.symbol("x2")
 
-    range_indices = []
-    nhot_indices = []
+    range_names = []
+    choice_names = []
     for i, p in enumerate(space):
         if N_HOT_PREFIX in p.name:
-            nhot_indices.append(i)
+            choice_names.append(p.name)
         else:
-            range_indices.append(i)
-    range_indices = torch.tensor(range_indices)
-    nhot_indices = torch.tensor(nhot_indices)
+            range_names.append(p.name)
 
-    def range_kernel():
-        ls_indices = ialloc.allocate(len(range_indices))
+    def index_for_name(name):
+        return next(i for i, p in enumerate(space) if p.name == name)
+
+    def scalar_kernel():
+        names = range_names
+        ls_indices = ialloc.allocate(len(names))
         ls = vtorch.unsqueeze(vtorch.index_select(lengthscale, -1, ls_indices),
                               -2)
-        return ovt.matern(
-            vtorch.cdist(
-                vtorch.index_select(x1, -1, range_indices)
-                / ls,
-                vtorch.index_select(x2, -1, range_indices)
-                / ls,
-                p=2),
-            nu=2.5)
+        return ovt.matern(vtorch.cdist(select_divide(names, ls), p=2),
+                          nu=2.5)
 
-    def nhot_kernel():
-        ls_indices = ialloc.allocate(len(nhot_indices))
+    def choice_kernel():
+        names = choice_names
+        ls_indices = ialloc.allocate(len(names))
         ls = vtorch.unsqueeze(vtorch.index_select(lengthscale, -1, ls_indices),
                               -2)
-        return vtorch.exp(
-            -vtorch.cdist(
-                vtorch.index_select(x1, -1, nhot_indices)
-                / ls,
-                vtorch.index_select(x2, -1, nhot_indices)
-                / ls,
-                p=1)
-        )
+        return vtorch.exp(-vtorch.cdist(select_divide(names, ls),
+                                        p=1))
 
     alpha_range_vs_nhot = vp.symbol("alpha_range_vs_nhot")
-    state.allocate(alpha_range_vs_nhot, (1,),
+    state.allocate(alpha_range_vs_nhot, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
-    sum_kernel = vtorch.sum(
-        vctorch.mul_along_dim(
-            vctorch.heads_tails(alpha_range_vs_nhot),
-            vtorch.stack([range_kernel(), nhot_kernel()], dim=-3),
+    sum_kernel = vp.with_metadata(
+        vtorch.sum(
+            vctorch.mul_along_dim(
+                vctorch.heads_tails(alpha_range_vs_nhot),
+                vtorch.stack([scalar_kernel(), choice_kernel()], dim=-3),
+                dim=-3),
             dim=-3),
-        dim=-3)
-    prod_kernel = vctorch.fast_prod_positive(
-        vtorch.stack([range_kernel(), nhot_kernel()],
-                     dim=-3),
-        dim=-3)
+        dict(comment="Kernel: Factorized scalar vs choice parameters"))
+    prod_kernel = vp.with_metadata(
+        vtorch.prod(
+            vtorch.stack([scalar_kernel(), choice_kernel()],
+                         dim=-3),
+            dim=-3),
+        dict(comment="Kernel: Joint scalar and choice parameters"))
 
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
-    state.allocate(alpha_factorized_vs_joint, (1,),
+    state.allocate(alpha_factorized_vs_joint, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
     scale = vp.symbol("scale")
@@ -111,10 +118,14 @@ def make_botorch_range_choice_kernel(space):
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(3.0, 6.0))
 
-    return kernel, state
+    kernel_runnable = vp.bottom_up_transform(partial(to_runnable, index_for_name),
+                                    kernel)
+    kernel_visualizable = vp.bottom_up_transform(to_visual, kernel)
+
+    return kernel_runnable, kernel_visualizable, state
 
 
-class VexprFullyJointGP(botorch.models.SingleTaskGP):
+class VexprFullyJointVisualizedGP(botorch.models.SingleTaskGP):
     def __init__(self, train_X, train_Y,
                  search_space,
                  search_xform,
@@ -125,7 +136,8 @@ class VexprFullyJointGP(botorch.models.SingleTaskGP):
                  # performance (e.g. during cross-validation)
                  round_inputs=True,
                  vectorize=True,
-                 torch_compile=False):
+                 torch_compile=False,
+                 visualize=True):
         assert train_Yvar is None
 
         input_batch_shape, aug_batch_shape = self.get_batch_dimensions(
@@ -143,13 +155,15 @@ class VexprFullyJointGP(botorch.models.SingleTaskGP):
 
         xform = ol.transforms.Chain(search_space, *xforms)
 
-        kernel_vexpr, state_builder = make_botorch_range_choice_kernel(
-            xform.space2)
+        (kernel_vexpr,
+         kernel_viz_vexpr,
+         state_builder) = make_botorch_range_choice_kernel(xform.space2)
         state_modules = state_builder.instantiate(aug_batch_shape)
         covar_module = VexprKernel(kernel_vexpr, state_modules,
                                    batch_shape=aug_batch_shape,
                                    vectorize=vectorize,
                                    torch_compile=torch_compile)
+        self.kernel_viz_vexpr = kernel_viz_vexpr
 
         input_transform = ol.transforms.BotorchInputTransform(xform)
         if normalize_input:
@@ -182,6 +196,11 @@ class VexprFullyJointGP(botorch.models.SingleTaskGP):
             # noise_prior=gpytorch.priors.GammaPrior(0.9, 10.0),
         )
 
+        self.viz_header_printed = False
+        self.visualize = visualize
+
+        register_comment_printing()
+
         super().__init__(
             train_X, train_Y,
             input_transform=input_transform,
@@ -189,3 +208,27 @@ class VexprFullyJointGP(botorch.models.SingleTaskGP):
             likelihood=likelihood,
             **extra_kwargs
         )
+
+    def _visualize(self):
+        if not self.visualize:
+            return
+
+        with torch.no_grad():
+            parameters = {name: module.value
+                          for name, module in self.covar_module.state.items()}
+            viz_expr = vp.partial_eval(self.kernel_viz_vexpr, parameters)
+
+        filename = "joint-fit.txt"
+
+        if not self.viz_header_printed:
+            print(f"Logging to {filename}")
+            with open(filename, "w") as f:
+                print_model_structure(self, f)
+            self.viz_header_printed = True
+
+        with open(filename, "a") as f:
+            print_model_state(self, f)
+
+    def forward(self, x):
+        self._visualize()
+        return super().forward(x)

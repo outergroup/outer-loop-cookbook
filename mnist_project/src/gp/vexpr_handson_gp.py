@@ -14,6 +14,7 @@ from .gp_utils import (
     StateBuilder,
     IndexAllocator,
     FastStandardize,
+    VexprKernel,
 )
 
 
@@ -207,74 +208,6 @@ def make_handson_kernel(space):
                    gpytorch.priors.GammaPrior(3.0, 6.0))
 
     return kernel, state
-
-
-# Lets long-running processes that instantiate multiple GPs avoid recompiling.
-# Sadly, compiling is still required once for every batch_shape, since
-# torch.vmap doesn't work with torch.compile, so each Vexpr needs to handle
-# batching internally thus is different for each batch_shape. This caching will
-# become much more powerful if we can switch to vmapping a torch.compiled
-# function that is batch-unaware.
-cached_compiled_fs = {}
-
-class VexprKernel(gpytorch.kernels.Kernel):
-    def __init__(self, kernel_vexpr, state_modules, batch_shape, vectorize=True,
-                 torch_compile=False, initialize="mean"):
-        super().__init__(batch_shape=batch_shape)
-        self.kernel_vexpr = kernel_vexpr
-        self.state = torch.nn.ModuleDict(state_modules)
-        self.kernel_f = None
-        self.canary = torch.tensor(0.)
-        self.vectorize = vectorize
-        self.torch_compile = torch_compile
-
-    def _initialize_from_inputs(self, x1, x2):
-        if self.vectorize:
-            inputs = {"x1": x1,
-                      "x2": x2,
-                      **{name: module.value
-                         for name, module in self.state.items()}}
-            self.kernel_vexpr = vp.vectorize(self.kernel_vexpr, inputs)
-
-        if self.torch_compile:
-            kernel_f2 = vp.to_python(self.kernel_vexpr)
-        else:
-            kernel_f2 = partial(vp.eval, self.kernel_vexpr)
-
-        def kernel_f(x1, x2, parameters):
-            return kernel_f2({"x1": x1, "x2": x2, **parameters})
-
-        if self.torch_compile:
-            comparable_vexpr = vp.comparable_hashable(self.kernel_vexpr)
-            compiled_f = cached_compiled_fs.get(comparable_vexpr, None)
-            if compiled_f is None:
-                compiled_f = torch.compile(kernel_f)
-                cached_compiled_fs[comparable_vexpr] = compiled_f
-            kernel_f = compiled_f
-
-        self.kernel_f = kernel_f
-
-    def _apply(self, fn):
-        self = super()._apply(fn)
-        self.canary = fn(self.canary)
-        self.kernel_vexpr = tree_map(
-            lambda v: (fn(v)
-                       if isinstance(v, torch.Tensor)
-                       else v),
-            self.kernel_vexpr)
-        return self
-
-    def forward(self, x1, x2, diag: bool = False, last_dim_is_batch: bool = False):
-        assert not diag
-        assert not last_dim_is_batch
-
-        parameters = {name: module.value
-                      for name, module in self.state.items()}
-
-        with torch.device(self.canary.device):
-            if self.kernel_f is None:
-                self._initialize_from_inputs(x1, x2)
-            return self.kernel_f(x1, x2, parameters)
 
 
 class VexprHandsOnGP(botorch.models.SingleTaskGP):
