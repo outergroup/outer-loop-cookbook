@@ -18,7 +18,6 @@ from .gp_utils import (
     select_divide,
     to_runnable,
     to_visual,
-    register_comment_printing,
     print_model_structure,
     print_model_state,
 )
@@ -198,8 +197,6 @@ class VexprFullyJointVisualizedGP(botorch.models.SingleTaskGP):
 
         self.viz_header_printed = False
         self.visualize = visualize
-
-        register_comment_printing()
 
         super().__init__(
             train_X, train_Y,

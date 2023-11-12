@@ -277,25 +277,6 @@ annotate_lengthscale_p, annotate_lengthscale = _p_and_constructor("annotate_leng
 annotate_scale_p, annotate_scale = _p_and_constructor("annotate_scale")
 
 
-def new_repr(old_repr, expr):
-    if isinstance(expr, vexpr.core.VexprWithMetadata):
-        prefix = "\n# " + expr.metadata["comment"] + "\n"
-        return prefix + old_repr(expr)
-    else:
-        return old_repr(expr)
-
-registered = [False]
-
-
-def register_comment_printing():
-    if not registered[0]:
-        vexpr.core.repr_impls.update({
-            op: partial(new_repr, old)
-            for op, old in vexpr.core.repr_impls.items()
-        })
-        registered[0] = True
-
-
 def to_runnable(index_for_name, expr):
     if expr.op == vtorch.primitives.cdist_p:
         # for any expr that has a select_divide as a child, convert it to a pair
@@ -384,7 +365,7 @@ def to_visual(expr):
     return expr
 
 
-def print_model_structure(model, fout):
+def model_structure(model):
     with torch.no_grad():
         parameters = {name: module.value
                       for name, module in model.covar_module.state.items()}
@@ -412,13 +393,17 @@ def print_model_structure(model, fout):
             return expr
 
     visual_structure = vp.bottom_up_transform(alias_values, expr_with_values)
+    return visual_structure, names
 
+
+def print_model_structure(model, fout):
+    visual_structure, names = model_structure(model)
     print(visual_structure, file=fout)
     print("<<<<", file=fout)
     print(",".join(names), file=fout)
 
 
-def print_model_state(model, fout):
+def model_state(model):
     with torch.no_grad():
         parameters = {name: module.value
                       for name, module in model.covar_module.state.items()}
@@ -437,5 +422,9 @@ def print_model_state(model, fout):
             return expr
 
     vp.bottom_up_transform(extract_values, expr_with_values)
+    return values
 
+
+def print_model_state(model, fout):
+    values = model_state(model)
     print(",".join(values), file=fout)

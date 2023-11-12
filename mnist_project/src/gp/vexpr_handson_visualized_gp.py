@@ -17,7 +17,6 @@ from .gp_utils import (
     select_divide,
     to_runnable,
     to_visual,
-    register_comment_printing,
     print_model_structure,
     print_model_state,
 )
@@ -214,8 +213,9 @@ def make_handson_kernel(space):
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(3.0, 6.0))
 
-    kernel_runnable = vp.bottom_up_transform(partial(to_runnable, index_for_name),
-                                    kernel)
+    kernel_runnable = vp.bottom_up_transform(partial(to_runnable,
+                                                     index_for_name),
+                                             kernel)
     kernel_visualizable = vp.bottom_up_transform(to_visual, kernel)
 
     return kernel_runnable, kernel_visualizable, state
@@ -335,8 +335,6 @@ class VexprHandsOnVisualizedGP(botorch.models.SingleTaskGP):
 
         self.viz_header_printed = False
         self.visualize = visualize
-
-        register_comment_printing()
 
         super().__init__(
             train_X, train_Y,
