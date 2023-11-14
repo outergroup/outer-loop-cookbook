@@ -17,10 +17,7 @@ from .gp_utils import (
     select_divide,
     to_runnable,
     to_visual,
-    print_model_structure,
-    print_model_state,
 )
-
 
 N_HOT_PREFIX = "choice_nhot"
 
@@ -48,7 +45,7 @@ def make_handson_kernel(space):
 
     ialloc = IndexAllocator()
 
-    lengthscale = vp.symbol("lengthscale")
+    lengthscale = vp.visual.scale(vp.symbol("lengthscale"))
     x1 = vp.symbol("x1")
     x2 = vp.symbol("x2")
 
@@ -70,7 +67,7 @@ def make_handson_kernel(space):
                                         p=1))
 
     def scalar_factorized_and_joint(names, suffix):
-        w_additive = vp.symbol("w_additive" + suffix)
+        w_additive = vp.visual.mixing_weight(vp.symbol("w_additive" + suffix))
         alpha_factorized_or_joint = vp.symbol("alpha_factorized_or_joint"
                                               + suffix)
         state.allocate(w_additive, (len(names),),
@@ -142,22 +139,22 @@ def make_handson_kernel(space):
 
     architecture_joint_names = ["log_gmean_channels_and_units"]
 
-    regime_kernel = vp.with_metadata(
+    regime_kernel = vp.visual.comment(
         vtorch.prod(
             vtorch.stack([scalar_kernel(regime_joint_names)]
                          + regime_kernels("_factorized"),
                          dim=-3),
             dim=-3),
-        dict(comment="Regime kernel"))
-    architecture_kernel = vp.with_metadata(
+        "Regime kernel")
+    architecture_kernel = vp.visual.comment(
         vtorch.prod(
             vtorch.stack([scalar_kernel(architecture_joint_names)]
                          + architecture_kernels("_factorized"),
                          dim=-3),
             dim=-3),
-        dict(comment="Architecture kernel")
+       "Architecture kernel"
     )
-    joint_kernel = vp.with_metadata(
+    joint_kernel = vp.visual.comment(
         vtorch.prod(
             vtorch.stack([scalar_kernel(regime_joint_names
                                         + architecture_joint_names)]
@@ -165,14 +162,14 @@ def make_handson_kernel(space):
                          + architecture_kernels("_joint"),
                          dim=-3),
             dim=-3),
-        dict(comment="Joint regime and architecture kernel")
+        "Joint regime and architecture kernel"
     )
 
     alpha_regime_vs_architecture = vp.symbol("alpha_regime_vs_architecture")
     state.allocate(alpha_regime_vs_architecture, (1,),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
-    factorized_kernel = vp.with_metadata(
+    factorized_kernel = vp.visual.comment(
         vtorch.sum(
             vctorch.mul_along_dim(
                 vctorch.heads_tails(
@@ -183,11 +180,11 @@ def make_handson_kernel(space):
                 ], dim=-3),
                 dim=-3),
             dim=-3),
-        dict(comment="Factorized regime and architecture kernels")
+        "Factorized regime and architecture kernels"
     )
 
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
-    scale = vp.symbol("scale")
+    scale = vp.visual.scale(vp.symbol("scale"))
 
     state.allocate(alpha_factorized_vs_joint, (1,),
                    zero_one_exclusive(),
@@ -216,7 +213,7 @@ def make_handson_kernel(space):
     kernel_runnable = vp.bottom_up_transform(partial(to_runnable,
                                                      index_for_name),
                                              kernel)
-    kernel_visualizable = vp.bottom_up_transform(to_visual, kernel)
+    kernel_visualizable = vp.visual.optimize(vp.bottom_up_transform(to_visual, kernel))
 
     return kernel_runnable, kernel_visualizable, state
 
@@ -343,29 +340,3 @@ class VexprHandsOnVisualizedGP(botorch.models.SingleTaskGP):
             likelihood=likelihood,
             **extra_kwargs
         )
-
-
-    def _visualize(self):
-        if not self.visualize:
-            return
-
-        with torch.no_grad():
-            parameters = {name: module.value
-                          for name, module in self.covar_module.state.items()}
-            viz_expr = vp.partial_eval(self.kernel_viz_vexpr, parameters)
-
-        filename = "handson-fit.txt"
-
-        if not self.viz_header_printed:
-            print(f"Logging to {filename}")
-            with open(filename, "w") as f:
-                print_model_structure(self, f)
-            self.viz_header_printed = True
-
-        with open(filename, "a") as f:
-            print_model_state(self, f)
-
-
-    def forward(self, x):
-        self._visualize()
-        return super().forward(x)

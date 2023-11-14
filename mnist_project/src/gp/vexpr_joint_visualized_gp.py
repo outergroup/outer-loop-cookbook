@@ -18,8 +18,6 @@ from .gp_utils import (
     select_divide,
     to_runnable,
     to_visual,
-    print_model_structure,
-    print_model_state,
 )
 
 
@@ -45,7 +43,7 @@ def make_botorch_range_choice_kernel(space):
 
     ialloc = IndexAllocator()
 
-    lengthscale = vp.symbol("lengthscale")
+    lengthscale = vp.visual.scale(vp.symbol("lengthscale"))
     x1 = vp.symbol("x1")
     x2 = vp.symbol("x2")
 
@@ -80,26 +78,26 @@ def make_botorch_range_choice_kernel(space):
     state.allocate(alpha_range_vs_nhot, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
-    sum_kernel = vp.with_metadata(
+    sum_kernel = vp.visual.comment(
         vtorch.sum(
             vctorch.mul_along_dim(
                 vctorch.heads_tails(alpha_range_vs_nhot),
                 vtorch.stack([scalar_kernel(), choice_kernel()], dim=-3),
                 dim=-3),
             dim=-3),
-        dict(comment="Kernel: Factorized scalar vs choice parameters"))
-    prod_kernel = vp.with_metadata(
+        "Kernel: Factorized scalar vs choice parameters")
+    prod_kernel = vp.visual.comment(
         vtorch.prod(
             vtorch.stack([scalar_kernel(), choice_kernel()],
                          dim=-3),
             dim=-3),
-        dict(comment="Kernel: Joint scalar and choice parameters"))
+        "Kernel: Joint scalar and choice parameters")
 
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
     state.allocate(alpha_factorized_vs_joint, (),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
-    scale = vp.symbol("scale")
+    scale = vp.visual.scale(vp.symbol("scale"))
     state.allocate(scale, (),
                    gpytorch.constraints.GreaterThan(1e-4),
                    gpytorch.priors.GammaPrior(2.0, 0.15))
@@ -119,7 +117,7 @@ def make_botorch_range_choice_kernel(space):
 
     kernel_runnable = vp.bottom_up_transform(partial(to_runnable, index_for_name),
                                     kernel)
-    kernel_visualizable = vp.bottom_up_transform(to_visual, kernel)
+    kernel_visualizable = vp.visual.optimize(vp.bottom_up_transform(to_visual, kernel))
 
     return kernel_runnable, kernel_visualizable, state
 
@@ -205,27 +203,3 @@ class VexprFullyJointVisualizedGP(botorch.models.SingleTaskGP):
             likelihood=likelihood,
             **extra_kwargs
         )
-
-    def _visualize(self):
-        if not self.visualize:
-            return
-
-        with torch.no_grad():
-            parameters = {name: module.value
-                          for name, module in self.covar_module.state.items()}
-            viz_expr = vp.partial_eval(self.kernel_viz_vexpr, parameters)
-
-        filename = "joint-fit.txt"
-
-        if not self.viz_header_printed:
-            print(f"Logging to {filename}")
-            with open(filename, "w") as f:
-                print_model_structure(self, f)
-            self.viz_header_printed = True
-
-        with open(filename, "a") as f:
-            print_model_state(self, f)
-
-    def forward(self, x):
-        self._visualize()
-        return super().forward(x)

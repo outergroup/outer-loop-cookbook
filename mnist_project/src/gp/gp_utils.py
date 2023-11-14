@@ -272,10 +272,6 @@ matern_25_p, matern_25 = _p_and_constructor("matern_25")
 norm_l1_p, norm_l1 = _p_and_constructor("norm_l1")
 norm_l2_p, norm_l2 = _p_and_constructor("norm_l2")
 
-annotate_weight_p, annotate_weight = _p_and_constructor("annotate_weight")
-annotate_lengthscale_p, annotate_lengthscale = _p_and_constructor("annotate_lengthscale")
-annotate_scale_p, annotate_scale = _p_and_constructor("annotate_scale")
-
 
 def to_runnable(index_for_name, expr):
     if expr.op == vtorch.primitives.cdist_p:
@@ -309,7 +305,7 @@ def to_visual(expr):
             # multiplication
             new_arg0 = [
                 sum_operand.new(vp.primitives.operator_mul_p,
-                                (annotate_weight(w[i]),
+                                (w[i],
                                  vp.Vexpr(sum_operand.op,
                                           sum_operand.args,
                                           sum_operand.kwargs)),
@@ -321,7 +317,7 @@ def to_visual(expr):
         # Detect any mul_along_dim that isn't used for a weighted sum.
         w, t = expr.args
         if t.op != vtorch.primitives.stack_p:
-            expr = annotate_scale(w) * t
+            expr = w * t
 
     if expr.op == vtorch.primitives.cdist_p:
         assert expr.args[0].op == select_divide_p
@@ -332,7 +328,7 @@ def to_visual(expr):
         assert ls.op == vtorch.primitives.index_select_p
         symbol = ls.args[0]
         indices = ls.args[2]
-        new_arg0 = [compare(name) / annotate_lengthscale(symbol[index])
+        new_arg0 = [compare(name) / symbol[index]
                     for name, index in zip(names, indices)]
         p = expr.kwargs.get("p", 2)
         if p == 1:
@@ -363,68 +359,3 @@ def to_visual(expr):
             expr = expr.new(op, expr.args, {})
 
     return expr
-
-
-def model_structure(model):
-    with torch.no_grad():
-        parameters = {name: module.value
-                      for name, module in model.covar_module.state.items()}
-        expr_with_values = vp.partial_eval(model.kernel_viz_vexpr, parameters)
-
-    names = [
-        "mean",
-        "noise",
-    ]
-
-    def alias_values(expr):
-        if expr.op == annotate_weight_p:
-            name = f"$W{len(names)}"
-            names.append(name)
-            return vp.symbol(name)
-        elif expr.op == annotate_scale_p:
-            name = f"$S{len(names)}"
-            names.append(name)
-            return vp.symbol(name)
-        elif expr.op == annotate_lengthscale_p:
-            name = f"$LS{len(names)}"
-            names.append(name)
-            return vp.symbol(name)
-        else:
-            return expr
-
-    visual_structure = vp.bottom_up_transform(alias_values, expr_with_values)
-    return visual_structure, names
-
-
-def print_model_structure(model, fout):
-    visual_structure, names = model_structure(model)
-    print(visual_structure, file=fout)
-    print("<<<<", file=fout)
-    print(",".join(names), file=fout)
-
-
-def model_state(model):
-    with torch.no_grad():
-        parameters = {name: module.value
-                      for name, module in model.covar_module.state.items()}
-        expr_with_values = vp.partial_eval(model.kernel_viz_vexpr, parameters)
-
-    values = [
-        str(model.mean_module.constant.detach().item()),
-        str(model.likelihood.noise.detach().item()),
-    ]
-
-    def extract_values(expr):
-        if expr.op in (annotate_weight_p, annotate_scale_p,
-                        annotate_lengthscale_p):
-            values.append(str(expr.args[0].item()))
-        else:
-            return expr
-
-    vp.bottom_up_transform(extract_values, expr_with_values)
-    return values
-
-
-def print_model_state(model, fout):
-    values = model_state(model)
-    print(",".join(values), file=fout)
