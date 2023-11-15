@@ -294,30 +294,12 @@ def to_runnable(index_for_name, expr):
 
 
 def to_visual(expr):
-    if expr.op == vtorch.primitives.sum_p:
-        if isinstance(expr.args[0], vp.Vexpr) \
-           and expr.args[0].op == vctorch.primitives.mul_along_dim_p:
-            w, t = expr.args[0].args
-            assert t.op == vtorch.primitives.stack_p
-            assert (not isinstance(t.args[0], vp.Vexpr)
-                    and isinstance(t.args[0], (list, tuple)))
-            # zip w with the stack, moving comments up to above the
-            # multiplication
-            new_arg0 = [
-                sum_operand.new(vp.primitives.operator_mul_p,
-                                (w[i],
-                                 vp.Vexpr(sum_operand.op,
-                                          sum_operand.args,
-                                          sum_operand.kwargs)),
-                                {})
-                for i, sum_operand in enumerate(t.args[0])]
-            expr = expr.update_args((new_arg0,))
-
     if expr.op == vctorch.primitives.mul_along_dim_p:
-        # Detect any mul_along_dim that isn't used for a weighted sum.
+        # We only visualize non-batched models, and visual optimization zips the
+        # multiplication so that we aren't multiplying vectors, so we can
+        # display simple multiplication and still be correct.
         w, t = expr.args
-        if t.op != vtorch.primitives.stack_p:
-            expr = w * t
+        expr = w * t
 
     if expr.op == vtorch.primitives.cdist_p:
         assert expr.args[0].op == select_divide_p

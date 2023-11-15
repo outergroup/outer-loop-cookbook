@@ -117,7 +117,9 @@ def make_botorch_range_choice_kernel(space):
 
     kernel_runnable = vp.bottom_up_transform(partial(to_runnable, index_for_name),
                                     kernel)
-    kernel_visualizable = vp.visual.optimize(vp.bottom_up_transform(to_visual, kernel))
+    kernel_visualizable = vp.visual.optimize(kernel)
+    kernel_visualizable = vp.bottom_up_transform(to_visual, kernel_visualizable)
+    kernel_visualizable = vp.visual.propagate_types(kernel_visualizable)
 
     return kernel_runnable, kernel_visualizable, state
 
