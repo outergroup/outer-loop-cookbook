@@ -7,7 +7,6 @@ import outerloop as ol
 import outerloop.vexpr.torch as ovt
 import torch
 import vexpr as vp
-import vexpr.core
 import vexpr.torch as vtorch
 import vexpr.custom.torch as vctorch
 from vexpr.core import _p_and_constructor
@@ -298,8 +297,7 @@ def to_visual(expr):
         # We only visualize non-batched models, and visual optimization zips the
         # multiplication so that we aren't multiplying vectors, so we can
         # display simple multiplication and still be correct.
-        w, t = expr.args
-        expr = w * t
+        expr = expr.new(vp.primitives.operator_mul_p, expr.args, dict())
 
     if expr.op == vtorch.primitives.cdist_p:
         assert expr.args[0].op == select_divide_p
