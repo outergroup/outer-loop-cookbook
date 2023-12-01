@@ -308,7 +308,7 @@ def to_visual(expr):
         assert ls.op == vtorch.primitives.index_select_p
         symbol = ls.args[0]
         indices = ls.args[2]
-        new_arg0 = [compare(name) / symbol[index]
+        new_arg0 = [compare(name) / symbol[..., index]
                     for name, index in zip(names, indices)]
         p = expr.kwargs.get("p", 2)
         if p == 1:

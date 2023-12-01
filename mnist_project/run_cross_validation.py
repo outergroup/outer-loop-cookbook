@@ -1,28 +1,25 @@
-import copy
 import os
-import shutil
-import pprint
 import random
 from functools import partial
 
 import botorch
 import torch
 import gpytorch
-from botorch.cross_validation import batch_cross_validation, gen_loo_cv_folds
+from botorch.cross_validation import gen_loo_cv_folds, CVFolds, CVResults
 
 from src.sweeps import CONFIGS
-from src import gen
-from src.gp import mnist_metrics, MODELS
+from src.gp import MODELS
 
 from src.gp.gp_utils import configs_dirs_to_X_Y
 from src.gp.mnist_metrics import trial_dir_to_loss_y
 from src.scheduling import parse_results
+from src.visuals import MeanNoiseKernelDistributionVisual
 
 SMOKE_TEST = os.environ.get("SMOKE_TEST")
 
 
 def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
-        compile=False, trace=False):
+        compile=False, trace=False, visualize=True):
     # import logging
     # logging.basicConfig()
     # logging.getLogger().setLevel(logging.DEBUG)
@@ -38,7 +35,6 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
 
     project_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(project_dir)
-    sweep_dir = os.path.join(project_dir, "results", sweep_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     search_space = config["search_space"]
@@ -54,7 +50,7 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
     if SMOKE_TEST:
         n_cvs = [10, 20]
     else:
-        n_cvs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
+        n_cvs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160]
 
     for shuffle_seed in shuffle_seeds:
         configs, trial_dirs, _ = parse_results(sweep_name)
@@ -72,16 +68,64 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
         if shuffle_seed is not None:
             suffix = f"-seed{shuffle_seed}"
 
+        mll_cls = gpytorch.mlls.ExactMarginalLogLikelihood
         result_dir = "results/cv"
         os.makedirs(result_dir, exist_ok=True)
         for n_cv in n_cvs:
             print(f"# of examples: {n_cv}")
             cv_folds = gen_loo_cv_folds(train_X=X[:n_cv], train_Y=Y[:n_cv])
 
-            # optimization_log = []
+            def run_cross_validation():
+                model_cv = model_cls(cv_folds.train_X, cv_folds.train_Y)
+                mll_cv = mll_cls(model_cv.likelihood, model_cv)
+                mll_cv.to(cv_folds.train_X)
 
-            # def callback(parameters, result):
-            #     optimization_log.append((copy.deepcopy(parameters), result))
+                if visualize:
+                    visual = MeanNoiseKernelDistributionVisual(model_cv, num_values_per_param=n_cv)
+
+                    def callback(parameters, result):
+                        """
+                        Note: botorch will wrap this callback in slow code
+                        """
+                        visual.on_update(model_cv)
+
+                    fit_args = dict(
+                        optimizer_kwargs=dict(
+                            callback=callback
+                        )
+                    )
+                else:
+                    fit_args = {}
+
+                mll_cv = botorch.fit_gpytorch_mll(mll_cv, **fit_args)
+
+                if visualize:
+                    visual.on_update(model_cv)
+                    filename = f"cross_validate{n_cv}.html"
+                    with open(filename, "w") as fout:
+                        print(f"Writing {filename}")
+                        fout.write(visual.full_html())
+
+                with torch.no_grad():
+                    posterior = model_cv.posterior(
+                        cv_folds.test_X, observation_noise=True
+                    )
+
+                cv_results = CVResults(
+                    model=model_cv,
+                    posterior=posterior,
+                    observed_Y=cv_folds.test_Y,
+                    observed_Yvar=cv_folds.test_Yvar,
+                )
+
+                filename = os.path.join(result_dir, f"cv-{sweep_name}-{model_name}{suffix}-{n_cv}.pt")
+                result = {
+                    "state_dict": cv_results.model.state_dict(),
+                    "posterior": cv_results.posterior,
+                    "observed_Y": cv_results.observed_Y.cpu(),
+                }
+                print(f"Saving {filename}")
+                torch.save(result, filename)
 
             if trace:
                 from torch.profiler import profile, record_function, ProfilerActivity
@@ -89,12 +133,7 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
                 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                              record_shapes=group_by_shape) as prof:
                     with record_function("batch_cross_validation"):
-                        cv_results = batch_cross_validation(
-                            model_cls=model_cls,
-                            mll_cls=gpytorch.mlls.ExactMarginalLogLikelihood,
-                            cv_folds=cv_folds,
-                            observation_noise=True,
-                        )
+                        run_cross_validation()
                     if torch.cuda.is_available():
                         torch.cuda.synchronize()
 
@@ -104,27 +143,7 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
                 prof.export_chrome_trace(filename)
                 print("Saved", filename)
             else:
-                cv_results = batch_cross_validation(
-                    model_cls=model_cls,
-                    mll_cls=gpytorch.mlls.ExactMarginalLogLikelihood,
-                    cv_folds=cv_folds,
-                    observation_noise=True,
-                    # fit_args=dict(
-                    #     optimizer_kwargs=dict(
-                    #         callback=callback
-                    #     )
-                    # )
-                )
-
-            filename = os.path.join(result_dir, f"cv-{sweep_name}-{model_name}{suffix}-{n_cv}.pt")
-            result = {
-                "state_dict": cv_results.model.state_dict(),
-                "posterior": cv_results.posterior,
-                "observed_Y": cv_results.observed_Y.cpu(),
-                # "optimization_log": optimization_log,
-            }
-            print(f"Saving {filename}")
-            torch.save(result, filename)
+                run_cross_validation()
 
 
 def main():

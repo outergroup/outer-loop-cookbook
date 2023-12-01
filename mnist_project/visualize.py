@@ -36,11 +36,11 @@ def scenario_fit(sweep_name, model_name, vectorize, torch_compile, num_models=1)
         Y = Y.expand(num_models, *Y.shape)
 
     model = model_cls(X, Y, search_space=search_space,
-                        search_xform=search_xform,
-                        round_inputs=False,
-                        vectorize=vectorize,
-                        torch_compile=torch_compile,
-                        visualize=False).to(device)
+                      search_xform=search_xform,
+                      round_inputs=False,
+                      vectorize=vectorize,
+                      torch_compile=torch_compile,
+                      visualize=False).to(device)
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(model.likelihood, model)
 
     s = f"{sweep_name} {model_name} vectorize={vectorize} torch.compile={torch_compile}"
@@ -64,8 +64,6 @@ def scenario_fit(sweep_name, model_name, vectorize, torch_compile, num_models=1)
     with open(filename, "w") as fout:
         print(f"Writing {filename}")
         fout.write(visual.full_html())
-
-
 
 
 scenario_fit("mnist1", "VexprHandsOnVisualizedGP",
