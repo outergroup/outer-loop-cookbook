@@ -5,7 +5,7 @@ from functools import partial
 import botorch
 import torch
 import gpytorch
-from botorch.cross_validation import gen_loo_cv_folds, CVFolds, CVResults
+from botorch.cross_validation import gen_loo_cv_folds, CVResults
 
 from src.sweeps import CONFIGS
 from src.gp import MODELS
@@ -13,13 +13,13 @@ from src.gp import MODELS
 from src.gp.gp_utils import configs_dirs_to_X_Y
 from src.gp.mnist_metrics import trial_dir_to_loss_y
 from src.scheduling import parse_results
-from src.visuals import MeanNoiseKernelDistributionVisual
+from src.visuals import MeanNoiseKernelDistributionTimeline
 
 SMOKE_TEST = os.environ.get("SMOKE_TEST")
 
 
 def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
-        compile=False, trace=False, visualize=True):
+        compile=False, trace=False, visualize=False):
     # import logging
     # logging.basicConfig()
     # logging.getLogger().setLevel(logging.DEBUG)
@@ -81,7 +81,7 @@ def run(sweep_name, model_name, shuffle_seeds=None, vectorize=False,
                 mll_cv.to(cv_folds.train_X)
 
                 if visualize:
-                    visual = MeanNoiseKernelDistributionVisual(model_cv, num_values_per_param=n_cv)
+                    visual = MeanNoiseKernelDistributionTimeline(model_cv, num_values_per_param=n_cv)
 
                     def callback(parameters, result):
                         """

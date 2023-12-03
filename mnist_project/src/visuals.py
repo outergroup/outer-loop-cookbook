@@ -38,8 +38,28 @@ def row(model, precomputed_kernel_values=None):
     ).decode('utf-8')
 
 
-def common_visualize_kwargs(outfile):
-    style = "border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto;"
+def snapshot_common_visualize_kwargs(serialized_values):
+    return dict(
+        html_preamble=lambda element_id: f"""
+        <style>
+        .vexpr-code {{
+        color: gray;
+        }}
+        </style>
+        <div style="width:800px; padding: 10px;" id="{element_id}">
+        <p><strong>Mean:</strong> constant</p>
+        <pre class="mean"></pre>
+        <p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
+        <pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
+        <p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
+        <pre class="noise"></pre>
+        </div>
+        """,
+        encoded_data=serialized_values,
+    )
+
+
+def timeline_common_visualize_kwargs(outfile):
     return dict(
         html_preamble=lambda element_id: f"""
         <style>
@@ -50,18 +70,30 @@ def common_visualize_kwargs(outfile):
         <div style="width:800px; padding: 10px;" id="{element_id}">
         <div class="timesteps"></div>
         <p><strong>Mean:</strong> constant</p>
-        <pre class="mean" style="{style} height: 50px;"></pre>
+        <pre class="mean"></pre>
         <p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
-        <pre class="kernel" style="{style} height: 400px;"></pre>
-        <p>Then take that matrix and add the following number to each value along the diagonal</p>
-        <pre class="noise" style="{style} height: 20px;"></pre>
+        <pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
+        <p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
+        <pre class="noise"></pre>
         </div>
         """,
         encoded_data=outfile.getvalue(),
     )
 
 
-def scalar_visualize_kwargs(kernel_keys, kernel_structure, outfile):
+def snapshot_scalar_visualize_kwargs(kernel_keys, kernel_structure, serialized_values):
+    return dict(
+        components=[vexpr.web.position_view(class_name="mean", key="mean"),
+                    vexpr.web.expression_view(class_name="kernel",
+                                              keys=kernel_keys,
+                                              text=repr(kernel_structure)),
+                    vexpr.web.scalar_view(class_name="noise", key="noise")],
+        encoded_to_snapshot=vexpr.web.scalar_snapshot_js(headers(kernel_keys)),
+        **snapshot_common_visualize_kwargs(serialized_values)
+    )
+
+
+def timeline_scalar_visualize_kwargs(kernel_keys, kernel_structure, outfile):
     return dict(
         components=[vexpr.web.time_control(class_name="timesteps"),
                     vexpr.web.position_view(class_name="mean", key="mean"),
@@ -70,11 +102,11 @@ def scalar_visualize_kwargs(kernel_keys, kernel_structure, outfile):
                                               text=repr(kernel_structure)),
                     vexpr.web.scalar_view(class_name="noise", key="noise")],
         encoded_to_timesteps=vexpr.web.scalar_timesteps_js(headers(kernel_keys)),
-        **common_visualize_kwargs(outfile)
+        **timeline_common_visualize_kwargs(outfile)
     )
 
 
-class MeanNoiseKernelVisual:
+class MeanNoiseKernelTimeline:
     def __init__(self, model):
         self.outfile = io.StringIO()
         (self.kernel_structure,
@@ -89,13 +121,50 @@ class MeanNoiseKernelVisual:
     def full_html(self):
         return vexpr.web.full_html(
             vexpr.web.visualize_timeline_html(
-                **scalar_visualize_kwargs(self.kernel_keys, self.kernel_structure,
-                                          self.outfile)
+                **timeline_scalar_visualize_kwargs(self.kernel_keys, self.kernel_structure,
+                                                   self.outfile)
             )
         )
 
 
-class MeanNoiseKernelNotebookVisual:
+class MeanNoiseKernelNotebookSnapshot:
+    def __init__(self, model):
+        (kernel_structure,
+         kernel_keys,
+         initial_values) = aliased_kernel(model)
+        serialized_values = row(model, precomputed_kernel_values=initial_values)
+
+        self.element_id = vexpr.notebook.visualize_snapshot(
+            **snapshot_scalar_visualize_kwargs(kernel_keys, kernel_structure,
+                                               serialized_values))
+
+    def on_update(self, model):
+        serialized_values = row(model)
+        vexpr.notebook.update_snapshot(self.element_id, serialized_values)
+
+
+class MeanNoiseKernelTimeline:
+    def __init__(self, model):
+        self.outfile = io.StringIO()
+        (self.kernel_structure,
+         self.kernel_keys,
+         initial_values) = aliased_kernel(model)
+        print(row(model, precomputed_kernel_values=initial_values),
+              file=self.outfile)
+
+    def on_update(self, model):
+        print(row(model), file=self.outfile)
+
+    def full_html(self):
+        return vexpr.web.full_html(
+            vexpr.web.visualize_timeline_html(
+                **snapshot_scalar_visualize_kwargs(self.kernel_keys, self.kernel_structure,
+                                                   self.outfile)
+            )
+        )
+
+
+class MeanNoiseKernelNotebookTimeline:
     def __init__(self, model):
         self.outfile = io.StringIO()
         (self.kernel_structure,
@@ -105,16 +174,16 @@ class MeanNoiseKernelNotebookVisual:
               file=self.outfile)
 
         self.element_id = vexpr.notebook.visualize_timeline(
-            **scalar_visualize_kwargs(self.kernel_keys, self.kernel_structure,
-                                      self.outfile))
+            **timeline_scalar_visualize_kwargs(self.kernel_keys, self.kernel_structure,
+                                               self.outfile))
 
     def on_update(self, model):
         print(row(model), file=self.outfile)
         vexpr.notebook.update_timeline(self.element_id, self.outfile.getvalue())
 
 
-def scalar_distribution_visualize_kwargs(kernel_keys, kernel_structure, outfile,
-                                         num_values_per_param):
+def timeline_distribution_visualize_kwargs(kernel_keys, kernel_structure, outfile,
+                                           num_values_per_param):
     return dict(
         components=[
             vexpr.web.time_control(class_name="timesteps"),
@@ -127,11 +196,39 @@ def scalar_distribution_visualize_kwargs(kernel_keys, kernel_structure, outfile,
             vexpr.web.scalar_distribution_view(class_name="noise", key="noise")],
         encoded_to_timesteps=vexpr.web.scalar_distribution_timesteps_js(
             headers(kernel_keys), num_values_per_param),
-        **common_visualize_kwargs(outfile)
+        **timeline_common_visualize_kwargs(outfile)
     )
 
 
-class MeanNoiseKernelDistributionVisual:
+def snapshot_distribution_visualize_kwargs(kernel_keys, kernel_structure, serialized_values,
+                                           num_values_per_param):
+    return dict(
+        components=[vexpr.web.position_distribution_view(class_name="mean", key="mean"),
+                    vexpr.web.expression_distribution_view(class_name="kernel",
+                                                           keys=kernel_keys,
+                                                           text=repr(kernel_structure)),
+                    vexpr.web.scalar_distribution_view(class_name="noise", key="noise")],
+        encoded_to_snapshot=vexpr.web.scalar_distribution_snapshot_js(headers(kernel_keys),
+                                                                      num_values_per_param),
+        **snapshot_common_visualize_kwargs(serialized_values)
+    )
+
+
+def snapshot_distribution_list_visualize_kwargs(kernel_keys, kernel_structure, serialized_values,
+                                                num_values_per_param):
+    return dict(
+        components=[vexpr.web.position_distribution_list_view(class_name="mean", key="mean"),
+                    vexpr.web.expression_distribution_list_view(class_name="kernel",
+                                                                keys=kernel_keys,
+                                                                text=repr(kernel_structure)),
+                    vexpr.web.scalar_distribution_list_view(class_name="noise", key="noise")],
+        encoded_to_snapshot=vexpr.web.scalar_distribution_list_snapshot_js(headers(kernel_keys),
+                                                                           num_values_per_param),
+        **snapshot_common_visualize_kwargs(serialized_values)
+    )
+
+
+class MeanNoiseKernelDistributionTimeline:
     def __init__(self, model, num_values_per_param):
         self.outfile = io.StringIO()
         (self.kernel_structure,
@@ -147,30 +244,104 @@ class MeanNoiseKernelDistributionVisual:
     def full_html(self):
         return vexpr.web.full_html(
             vexpr.web.visualize_timeline_html(
-                **scalar_distribution_visualize_kwargs(self.kernel_keys,
-                                                       self.kernel_structure,
-                                                       self.outfile,
-                                                       self.num_values_per_param),
+                **timeline_distribution_visualize_kwargs(self.kernel_keys,
+                                                         self.kernel_structure,
+                                                         self.outfile,
+                                                         self.num_values_per_param),
             )
         )
 
 
-class MeanNoiseKernelDistributionNotebookVisual:
+class MeanNoiseKernelDistributionNotebookTimeline:
     def __init__(self, model, num_values_per_param):
         self.outfile = io.StringIO()
         (self.kernel_structure,
          self.kernel_keys,
          initial_values) = aliased_kernel(model)
-        self.num_values_per_param = num_values_per_param
         print(row(model, precomputed_kernel_values=initial_values),
               file=self.outfile)
 
         self.element_id = vexpr.notebook.visualize_timeline(
-            **scalar_distribution_visualize_kwargs(self.kernel_keys,
-                                                   self.kernel_structure,
-                                                   self.outfile,
-                                                   self.num_values_per_param))
+            **timeline_distribution_visualize_kwargs(self.kernel_keys,
+                                                     self.kernel_structure,
+                                                     self.outfile,
+                                                     num_values_per_param))
 
     def on_update(self, model):
         print(row(model), file=self.outfile)
         vexpr.notebook.update_timeline(self.element_id, self.outfile.getvalue())
+
+
+class MeanNoiseKernelDistributionSnapshot:
+    def __init__(self, model, num_values_per_param):
+        (kernel_structure,
+         kernel_keys,
+         initial_values) = aliased_kernel(model)
+        serialized_values = row(model, precomputed_kernel_values=initial_values)
+        self.html = vexpr.web.full_html(
+            vexpr.web.visualize_snapshot_html(
+                **snapshot_distribution_visualize_kwargs(kernel_keys,
+                                                         kernel_structure,
+                                                         serialized_values,
+                                                         num_values_per_param),
+            )
+        )
+
+    def full_html(self):
+        return self.html
+
+
+class MeanNoiseKernelDistributionNotebookSnapshot:
+    def __init__(self, model, num_values_per_param):
+        (kernel_structure,
+         kernel_keys,
+         initial_values) = aliased_kernel(model)
+        serialized_values = row(model, precomputed_kernel_values=initial_values)
+
+        self.element_id = vexpr.notebook.visualize_snapshot(
+            **snapshot_distribution_visualize_kwargs(kernel_keys, kernel_structure,
+                                                     serialized_values,
+                                                     num_values_per_param))
+
+    def on_update(self, model):
+        serialized_values = row(model)
+        vexpr.notebook.update_snapshot(self.element_id, serialized_values)
+
+
+
+class MeanNoiseKernelDistributionListSnapshot:
+    def __init__(self, models, num_values_per_param):
+        (kernel_structure,
+         kernel_keys,
+         _) = aliased_kernel(models[0])
+        serialized_values = "\n".join([row(model) for model in models])
+        self.html = vexpr.web.full_html(
+            vexpr.web.visualize_snapshot_html(
+                **snapshot_distribution_list_visualize_kwargs(kernel_keys,
+                                                              kernel_structure,
+                                                              serialized_values,
+                                                              num_values_per_param),
+            )
+        )
+
+    def full_html(self):
+        return self.html
+
+
+
+class MeanNoiseKernelDistributionNotebookSnapshot:
+    def __init__(self, model, num_values_per_param):
+        (kernel_structure,
+         kernel_keys,
+         _) = aliased_kernel(models[0])
+        serialized_values = "\n".join([row(model) for model in models])
+
+        self.element_id = vexpr.notebook.visualize_snapshot(
+            **snapshot_distribution_list_visualize_kwargs(kernel_keys,
+                                                          kernel_structure,
+                                                          serialized_values,
+                                                          num_values_per_param))
+
+    def on_update(self, model):
+        serialized_values = row(model)
+        vexpr.notebook.update_snapshot(self.element_id, serialized_values)

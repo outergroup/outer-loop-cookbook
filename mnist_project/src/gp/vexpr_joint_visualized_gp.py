@@ -75,14 +75,15 @@ def make_botorch_range_choice_kernel(space):
                                         p=1))
 
     alpha_range_vs_nhot = vp.symbol("alpha_range_vs_nhot")
-    state.allocate(alpha_range_vs_nhot, (),
+    state.allocate(alpha_range_vs_nhot, (1,),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
     sum_kernel = vp.visual.comment(
         vtorch.sum(
             vctorch.mul_along_dim(
                 vctorch.heads_tails(alpha_range_vs_nhot),
-                vtorch.stack([scalar_kernel(), choice_kernel()], dim=-3),
+                vtorch.stack([vp.visual.comment(scalar_kernel(), "Scalar parameters"),
+                              vp.visual.comment(choice_kernel(), "Choice parameters")], dim=-3),
                 dim=-3),
             dim=-3),
         "Kernel: Factorized scalar vs choice parameters")
@@ -94,7 +95,7 @@ def make_botorch_range_choice_kernel(space):
         "Kernel: Joint scalar and choice parameters")
 
     alpha_factorized_vs_joint = vp.symbol("alpha_factorized_vs_joint")
-    state.allocate(alpha_factorized_vs_joint, (),
+    state.allocate(alpha_factorized_vs_joint, (1,),
                    zero_one_exclusive(),
                    ol.priors.BetaPrior(2.0, 2.0))
     scale = vp.visual.scale(vp.symbol("scale"))
