@@ -38,23 +38,49 @@ def row(model, precomputed_kernel_values=None):
     ).decode('utf-8')
 
 
+def sampling_row(models, samples_per_model):
+    all_results = None
+
+    for model in models:
+        _, _, kernel_values = aliased_kernel(model)
+        kernel_values = [values[:samples_per_model]
+                         for values in kernel_values]
+
+        result = [
+            model.mean_module.constant.detach()[:samples_per_model].tolist(),
+            model.likelihood.noise.squeeze(-1).detach()[:samples_per_model].tolist(),
+        ] + kernel_values
+        if all_results is None:
+            all_results = result
+        else:
+            all_results = [a + b for a, b in zip(all_results, result)]
+
+    return base64.b64encode(
+        np.array(all_results, dtype=np.float32).tobytes()
+    ).decode('utf-8')
+
+
+
 def snapshot_common_visualize_kwargs(serialized_values):
     return dict(
         html_preamble=lambda element_id: f"""
-        <style>
-        .vexpr-code {{
-        color: gray;
-        }}
-        </style>
-        <div style="width:800px; padding: 10px;" id="{element_id}">
-        <p><strong>Mean:</strong> constant</p>
-        <pre class="mean"></pre>
-        <p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
-        <pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
-        <p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
-        <pre class="noise"></pre>
-        </div>
-        """,
+<style>
+.vexpr-code {{
+color: gray;
+}}
+circle.point {{
+fill: blue;
+opacity: 0.2;
+}}
+</style>
+<div id="{element_id}">
+<p><strong>Mean:</strong> constant</p>
+<pre class="mean"></pre>
+<p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
+<pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
+<p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
+<pre class="noise"></pre>
+</div>""",
         encoded_data=serialized_values,
     )
 
@@ -62,21 +88,24 @@ def snapshot_common_visualize_kwargs(serialized_values):
 def timeline_common_visualize_kwargs(outfile):
     return dict(
         html_preamble=lambda element_id: f"""
-        <style>
-        .vexpr-code {{
-        color: gray;
-        }}
-        </style>
-        <div style="width:800px; padding: 10px;" id="{element_id}">
-        <div class="timesteps"></div>
-        <p><strong>Mean:</strong> constant</p>
-        <pre class="mean"></pre>
-        <p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
-        <pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
-        <p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
-        <pre class="noise"></pre>
-        </div>
-        """,
+<style>
+.vexpr-code {{
+color: gray;
+}}
+circle.point {{
+fill: blue;
+opacity: 0.2;
+}}
+</style>
+<div style="width:800px; padding: 10px;" id="{element_id}">
+<div class="timesteps"></div>
+<p><strong>Mean:</strong> constant</p>
+<pre class="mean"></pre>
+<p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
+<pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
+<p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
+<pre class="noise"></pre>
+</div>""",
         encoded_data=outfile.getvalue(),
     )
 
@@ -328,9 +357,33 @@ class MeanNoiseKernelDistributionListSnapshot:
         return self.html
 
 
+class SamplingMeanNoiseKernelDistributionListSnapshot:
+    def __init__(self, models_lists, samples_per_model=10):
+        (kernel_structure,
+         kernel_keys,
+         _) = aliased_kernel(models_lists[0][0])
+        serialized_values = "\n".join([sampling_row(models, samples_per_model)
+                                       for models in models_lists])
+
+        num_values_per_param = [samples_per_model * len(models)
+                                for models in models_lists]
+
+        self.html = vexpr.web.full_html(
+            vexpr.web.visualize_snapshot_html(
+                **snapshot_distribution_list_visualize_kwargs(
+                    kernel_keys, kernel_structure, serialized_values,
+                    num_values_per_param),
+            )
+        )
+
+    def full_html(self):
+        return self.html
+
+
+
 
 class MeanNoiseKernelDistributionNotebookSnapshot:
-    def __init__(self, model, num_values_per_param):
+    def __init__(self, models, num_values_per_param):
         (kernel_structure,
          kernel_keys,
          _) = aliased_kernel(models[0])
