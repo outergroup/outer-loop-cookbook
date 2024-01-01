@@ -10,7 +10,7 @@ from src.gp.gp_utils import (
 from src.gp.mnist_metrics import trial_dir_to_loss_y
 from src.scheduling import parse_results
 from src.sweeps import CONFIGS
-from src.visuals import MeanNoiseKernelVisual
+from src.visuals import MeanNoiseKernelTimeline
 
 
 def scenario_fit(sweep_name, model_name, vectorize, torch_compile, num_models=1):
@@ -49,16 +49,17 @@ def scenario_fit(sweep_name, model_name, vectorize, torch_compile, num_models=1)
 
     mll.train()
 
-    visual = MeanNoiseKernelVisual(model)
+    visual = MeanNoiseKernelTimeline(model)
+    iteration = [0]
 
     def callback(parameters, result):
         """
         Note: botorch will wrap this callback in slow code
         """
-        visual.on_update(model)
+        iteration[0] += 1
+        visual.on_update(model, iteration[0])
 
     botorch.fit_gpytorch_mll(mll, optimizer_kwargs=dict(callback=callback))
-    visual.on_update(model)
 
     filename = "newly_created.html"
     with open(filename, "w") as fout:
