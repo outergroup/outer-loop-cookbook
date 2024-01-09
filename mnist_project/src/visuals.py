@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
-import rows2prose.web
-import rows2prose.notebook
+import rows2prose as r2p
+import rows2prose.notebook as r2p_nb
 import torch
 import vexpr as vp
 import vexpr.web
@@ -17,7 +17,7 @@ def aliased_kernel(model):
     return aliased_expr, aliases, values
 
 
-snapshot_preamble = lambda element_id: f"""
+snapshot_html = """
 <style>
 .vexpr-code {{
 color: gray;
@@ -27,17 +27,16 @@ fill: blue;
 opacity: 0.2;
 }}
 </style>
-<div id="{element_id}">
 <p><strong>Mean:</strong> constant</p>
-<pre class="mean"></pre>
+<pre data-key="mean" class="mean"></pre>
 <p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
 <pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
 <p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
-<pre class="noise"></pre>
-</div>"""
+<pre data-key="noise" class="noise"></pre>"""
 
 
-timeline_preamble = lambda element_id: f"""
+
+timeline_html = """
 <style>
 .vexpr-code {{
 color: gray;
@@ -47,14 +46,14 @@ fill: blue;
 opacity: 0.2;
 }}
 </style>
-<div style="width:800px; padding: 10px;" id="{element_id}">
-<div class="timesteps"></div>
-<p><strong>Mean:</strong> constant</p>
-<pre class="mean"></pre>
-<p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
-<pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
-<p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
-<pre class="noise"></pre>
+<div style="width:800px; padding: 10px;">
+  <div class="timesteps"></div>
+  <p><strong>Mean:</strong> constant</p>
+  <pre data-key="mean" class="mean"></pre>
+  <p><strong>Covariance:</strong> Start with matrix formed by kernel</p>
+  <pre class="kernel" style="border: 1px solid silver; border-radius: 5px; padding: 10px; overflow: auto; height: 400px;"></pre>
+  <p><strong>Noise:</strong> Take that matrix and add the following number to each value along the diagonal. <em>(Plotted on log scale.)</em></p>
+  <pre data-key="noise" class="noise"></pre>
 </div>"""
 
 
@@ -110,20 +109,16 @@ class MeanNoiseKernelTimeline:
         self.df = pd.concat([self.df, df], ignore_index=True)
 
     def full_html(self):
-        return rows2prose.web.full_html(
-            rows2prose.web.visualize_timeline_html(
-                components=[
-                    rows2prose.web.time_control(class_name="timesteps"),
-                    rows2prose.web.timeline_position_view(
-                        class_name="mean", key="mean"),
-                    rows2prose.web.timeline_expression_view(
-                        class_name="kernel", keys=self.kernel_keys,
-                        text=repr(self.kernel_structure)),
-                    rows2prose.web.timeline_scalar_view(
-                        class_name="noise", key="noise")],
-                html_preamble=timeline_preamble,
-                df=self.df,
-            )
+        viz = r2p.Timeline
+        return r2p.full_html(
+            r2p.static(self.df, timeline_html,
+                       viz(viz.time_control(class_name="timesteps"),
+                           viz.position_view(class_name="mean"),
+                           viz.expression_view(
+                               class_name="kernel",
+                               keys=self.kernel_keys,
+                               text=repr(self.kernel_structure)),
+                           viz.positive_scalar_view(class_name="noise")))
         )
 
 
@@ -132,21 +127,19 @@ class MeanNoiseKernelNotebookSnapshot:
         (kernel_structure,
          kernel_keys,
          df) = snapshot_rows(model)
-        self.element_id = rows2prose.notebook.visualize_snapshot(
-            components=[
-                rows2prose.web.snapshot_position_view(
-                    class_name="mean", key="mean"),
-                rows2prose.web.snapshot_expression_view(
-                    class_name="kernel", keys=kernel_keys,
-                    text=repr(kernel_structure)),
-                rows2prose.web.snapshot_scalar_view(
-                    class_name="noise", key="noise")],
-            html_preamble=snapshot_preamble,
-            df=df)
+        viz = r2p.Snapshot
+        self.update = r2p_nb.display_dynamic(
+            snapshot_html,
+            viz(viz.position_view(class_name="mean"),
+                viz.expression_view(class_name="kernel", keys=kernel_keys,
+                                    text=repr(kernel_structure)),
+                viz.positive_scalar_view(class_name="noise"))
+        )
+        self.update(df)
 
     def on_update(self, model):
         (_, _, df) = snapshot_rows(model)
-        rows2prose.notebook.update_snapshot(self.element_id, df)
+        self.update(df)
 
 
 class MeanNoiseKernelNotebookTimeline:
@@ -155,25 +148,20 @@ class MeanNoiseKernelNotebookTimeline:
          kernel_keys,
          self.df) = timeline_rows(model, 0)
 
-        self.element_id = rows2prose.notebook.visualize_timeline(
-            components=[
-                rows2prose.web.time_control(class_name="timesteps"),
-                rows2prose.web.timeline_position_view(
-                    class_name="mean", key="mean"),
-                rows2prose.web.timeline_expression_view(
-                    class_name="kernel",
-                    keys=kernel_keys,
-                    text=repr(kernel_structure)),
-                rows2prose.web.timeline_scalar_view(
-                    class_name="noise", key="noise")],
-            html_preamble=timeline_preamble,
-            df=self.df,
-        )
+        viz = r2p.Timeline
+        self.update = r2p_nb.display_dynamic(
+            timeline_html,
+            viz(viz.time_control(class_name="timesteps"),
+                viz.position_view(class_name="mean"),
+                viz.expression_view(class_name="kernel", keys=kernel_keys,
+                                    text=repr(kernel_structure)),
+                viz.positive_scalar_view(class_name="noise")))
+        self.update(self.df)
 
     def on_update(self, model, timestep):
         (_, _, df) = timeline_rows(model, timestep)
         self.df = pd.concat([self.df, df], ignore_index=True)
-        rows2prose.notebook.update_timeline(self.element_id, self.df)
+        self.update(self.df)
 
 
 class MeanNoiseKernelDistributionTimeline:
@@ -187,22 +175,18 @@ class MeanNoiseKernelDistributionTimeline:
         self.df = pd.concat([self.df, df], ignore_index=True)
 
     def full_html(self):
-        return rows2prose.web.full_html(
-            rows2prose.web.visualize_timeline_html(
-                components=[
-                    rows2prose.web.time_control(class_name="timesteps"),
-                    rows2prose.web.timeline_position_distribution_view(
-                        class_name="mean", key="mean"),
-                    rows2prose.web.timeline_expression_distribution_view(
+        viz = r2p.DistributionTimeline
+        return r2p.full_html(
+            r2p.static(
+                self.df,
+                timeline_html,
+                viz(viz.time_control(class_name="timesteps"),
+                    viz.scalar_view(class_name="mean"),
+                    viz.expression_view(
                         class_name="kernel",
                         keys=self.kernel_keys,
                         text=repr(self.kernel_structure)),
-                    rows2prose.web.timeline_scalar_distribution_view(
-                        class_name="noise", key="noise")],
-                html_preamble=timeline_preamble,
-                df=self.df,
-            )
-        )
+                    viz.scalar_view(class_name="noise"))))
 
 
 class MeanNoiseKernelDistributionNotebookTimeline:
@@ -211,25 +195,22 @@ class MeanNoiseKernelDistributionNotebookTimeline:
          kernel_keys,
          self.df) = timeline_rows(model, 0)
 
-        self.element_id = rows2prose.notebook.visualize_timeline(
-            components=[
-                rows2prose.web.time_control(class_name="timesteps"),
-                rows2prose.web.timeline_position_distribution_view(
-                    class_name="mean", key="mean"),
-                rows2prose.web.timeline_expression_distribution_view(
+        viz = r2p.DistributionTimeline
+        self.update = r2p_nb.display_dynamic(
+            timeline_html,
+            viz(viz.time_control(class_name="timesteps"),
+                viz.scalar_view(class_name="mean"),
+                viz.expression_view(
                     class_name="kernel",
                     keys=kernel_keys,
                     text=repr(kernel_structure)),
-                rows2prose.web.timeline_scalar_distribution_view(
-                    class_name="noise", key="noise")],
-            html_preamble=timeline_preamble,
-            df=self.df,
-        )
+                viz.scalar_view(class_name="noise")))
+        self.update(self.df)
 
     def on_update(self, model):
         (_, _, df) = snapshot_rows(model)
         self.df = pd.concat([self.df, df], ignore_index=True)
-        rows2prose.notebook.update_timeline(self.element_id, self.df)
+        self.update(self.df)
 
 
 class MeanNoiseKernelDistributionSnapshot:
@@ -238,20 +219,18 @@ class MeanNoiseKernelDistributionSnapshot:
          kernel_keys,
          df) = snapshot_rows(model)
 
-        self.html = rows2prose.web.full_html(
-            rows2prose.web.visualize_snapshot_html(
-                components=[
-                    rows2prose.web.snapshot_position_distribution_view(
-                        class_name="mean", key="mean"),
-                    rows2prose.web.snapshot_expression_distribution_view(
-                        class_name="kernel", keys=kernel_keys,
+        viz = r2p.DistributionSnapshot
+        self.html = r2p.full_html(
+            r2p.static(
+                df,
+                snapshot_html,
+                viz(viz.time_control(class_name="timesteps"),
+                    viz.scalar_view(class_name="mean"),
+                    viz.expression_view(
+                        class_name="kernel",
+                        keys=kernel_keys,
                         text=repr(kernel_structure)),
-                    rows2prose.web.snapshot_scalar_distribution_view(
-                        class_name="noise", key="noise")],
-                html_preamble=snapshot_preamble,
-                df=df,
-            )
-        )
+                    viz.scalar_view(class_name="noise"))))
 
     def full_html(self):
         return self.html
@@ -263,20 +242,22 @@ class MeanNoiseKernelDistributionNotebookSnapshot:
          kernel_keys,
          self.df) = snapshot_rows(model)
 
-        self.element_id = rows2prose.notebook.visualize_snapshot(
-            components=[rows2prose.web.snapshot_position_distribution_view(class_name="mean", key="mean"),
-                        rows2prose.web.snapshot_expression_distribution_view(class_name="kernel",
-                                                                    keys=kernel_keys,
-                                                                    text=repr(kernel_structure)),
-                        rows2prose.web.snapshot_scalar_distribution_view(class_name="noise", key="noise")],
-            html_preamble=snapshot_preamble,
-            df=self.df,
-        )
+        viz = r2p.DistributionSnapshot
+
+        self.update = r2p_nb.display_dynamic(
+            timeline_html,
+            viz(viz.scalar_view(class_name="mean"),
+                viz.expression_view(
+                    class_name="kernel",
+                    keys=kernel_keys,
+                    text=repr(kernel_structure)),
+                viz.scalar_view(class_name="noise")))
+        self.update(self.df)
 
     def on_update(self, model):
         (_, _, df) = snapshot_rows(model)
         self.df = pd.concat([self.df, df], ignore_index=True)
-        rows2prose.notebook.update_snapshot(self.element_id, self.df)
+        self.update(self.df)
 
 
 
@@ -285,21 +266,17 @@ class MeanNoiseKernelDistributionListSnapshot:
         (kernel_structure,
          kernel_keys,
          df) = snapshot_rows(models)
-        self.html = rows2prose.web.full_html(
-            rows2prose.web.visualize_snapshot_html(
-                components=[
-                    rows2prose.web.snapshot_position_distribution_list_view(
-                        class_name="mean", key="mean"),
-                    rows2prose.web.snapshot_expression_distribution_list_view(
-                        class_name="kernel",
-                        keys=kernel_keys,
-                        text=repr(kernel_structure)),
-                    rows2prose.web.snapshot_scalar_distribution_list_view(
-                        class_name="noise", key="noise")],
-                html_preamble=snapshot_preamble,
-                df=df,
-            )
-        )
+
+        viz = r2p.DistributionListSnapshot
+
+        self.html = r2p.full_html(
+            r2p.static(df, snapshot_html,
+                       viz(viz.scalar_view(class_name="mean"),
+                           viz.expression_view(
+                               class_name="kernel",
+                               keys=kernel_keys,
+                               text=repr(kernel_structure)),
+                           viz.scalar_view(class_name="noise"))))
 
     def full_html(self):
         return self.html
@@ -321,21 +298,15 @@ class SamplingMeanNoiseKernelDistributionListSnapshot:
         # Store on self so that callers can access it.
         self.df = pd.concat(dfs, ignore_index=True)
 
-        self.html = rows2prose.web.full_html(
-            rows2prose.web.visualize_snapshot_distribution_lists_html(
-                components=[
-                    rows2prose.web.snapshot_position_distribution_list_view(
-                        class_name="mean", key="mean"),
-                    rows2prose.web.snapshot_expression_distribution_list_view(
-                        class_name="kernel",
-                        keys=kernel_keys,
-                        text=repr(kernel_structure)),
-                    rows2prose.web.snapshot_scalar_distribution_list_view(
-                        class_name="noise", key="noise")],
-                html_preamble=snapshot_preamble,
-                df=self.df,
-            )
-        )
+        viz = r2p.DistributionListSnapshot
 
+        self.html = r2p.full_html(
+            r2p.static(self.df, snapshot_html,
+                       viz(viz.scalar_view(class_name="mean"),
+                           viz.expression_view(
+                               class_name="kernel",
+                               keys=kernel_keys,
+                               text=repr(kernel_structure)),
+                           viz.scalar_view(class_name="noise"))))
     def full_html(self):
         return self.html
