@@ -35,7 +35,6 @@ def alias_values(expr):
     return aliased_expr, aliases, values
 
 
-
 def aliased_kernel(model):
     with torch.no_grad():
         parameters = {name: module.value
@@ -243,8 +242,10 @@ class MeanNoiseKernelDistributionTimeline:
                 timeline_html(self.kernel_html),
                 viz(viz.time_control(class_name="timesteps"),
                     viz.scalar_view(class_name="mean"),
-                    viz.scalar_view(class_name="scale"),
-                    viz.scalar_view(class_name="mixing_weight"),
+                    viz.scalar_view(class_name="scale", min_override=0,
+                                    use_data_max=True),
+                    viz.scalar_view(class_name="mixing_weight",
+                                    min_override=0, max_override=1, width=100),
                     viz.scalar_view(class_name="noise"))))
 
 
@@ -260,8 +261,10 @@ class MeanNoiseKernelDistributionNotebookTimeline:
             timeline_html(kernel_html),
             viz(viz.time_control(class_name="timesteps"),
                 viz.scalar_view(class_name="mean"),
-                viz.scalar_view(class_name="scale"),
-                viz.scalar_view(class_name="mixing_weight"),
+                viz.scalar_view(class_name="scale", min_override=0,
+                                use_data_max=True),
+                viz.scalar_view(class_name="mixing_weight",
+                                min_override=0, max_override=1, width=100),
                 viz.scalar_view(class_name="noise")))
         self.update(self.df)
 
@@ -358,9 +361,13 @@ class SamplingMeanNoiseKernelDistributionListSnapshot:
 
         self.html = r2p.full_html(
             r2p.static(self.df, snapshot_html(kernel_html),
-                       viz(viz.scalar_view(class_name="mean", point_radius=1),
-                           viz.scalar_view(class_name="scale", point_radius=1),
-                           viz.scalar_view(class_name="mixing_weight", point_radius=1),
-                           viz.scalar_view(class_name="noise", point_radius=1))))
+                       viz(viz.scalar_view(class_name="mean", point_radius=1,
+                                           use_data_min=True, use_data_max=True),
+                           viz.scalar_view(class_name="scale", point_radius=1, min_override=0,
+                                           use_data_max=True),
+                           viz.scalar_view(class_name="mixing_weight", point_radius=1,
+                                           min_override=0, max_override=1, width=100),
+                           viz.scalar_view(class_name="noise", point_radius=1, log_scale=True,
+                                           use_data_min=True, use_data_max=True))))
     def full_html(self):
         return self.html
